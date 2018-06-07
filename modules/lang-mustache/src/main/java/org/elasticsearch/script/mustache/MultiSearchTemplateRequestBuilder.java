@@ -24,14 +24,10 @@ import org.elasticsearch.action.support.IndicesOptions;
 import org.elasticsearch.client.ElasticsearchClient;
 
 public class MultiSearchTemplateRequestBuilder
-        extends ActionRequestBuilder<MultiSearchTemplateRequest, MultiSearchTemplateResponse, MultiSearchTemplateRequestBuilder> {
+        extends ActionRequestBuilder<MultiSearchTemplateRequest, MultiSearchTemplateResponse> {
 
     protected MultiSearchTemplateRequestBuilder(ElasticsearchClient client, MultiSearchTemplateAction action) {
         super(client, action, new MultiSearchTemplateRequest());
-    }
-
-    public MultiSearchTemplateRequestBuilder(ElasticsearchClient client) {
-        this(client, MultiSearchTemplateAction.INSTANCE);
     }
 
     public MultiSearchTemplateRequestBuilder add(SearchTemplateRequest request) {
@@ -56,6 +52,14 @@ public class MultiSearchTemplateRequestBuilder
 
     public MultiSearchTemplateRequestBuilder setIndicesOptions(IndicesOptions indicesOptions) {
         request().indicesOptions(indicesOptions);
+        return this;
+    }
+
+    /**
+     * Sets how many search requests specified in this multi search requests are allowed to be ran concurrently.
+     */
+    public MultiSearchTemplateRequestBuilder setMaxConcurrentSearchRequests(int maxConcurrentSearchRequests) {
+        request().maxConcurrentSearchRequests(maxConcurrentSearchRequests);
         return this;
     }
 }

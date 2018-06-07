@@ -1,0 +1,71 @@
+setup:
+
+  - do:
+      indices.create:
+          index: test
+          body:
+            settings:
+              number_of_replicas: 0
+            mappings:
+              test:
+                properties:
+                  title:
+                    type: keyword
+                  suggestions:
+                    type: completion
+                    contexts:
+                        -
+                          "name" : "format"
+                          "type" : "category"
+
+  - do:
+      warnings:
+        - "The ability to index a suggestion with no context on a context enabled completion field is deprecated and will be removed in the next major release."
+      bulk:
+        refresh: true
+        index: test
+        type: test
+        body:
+          - '{"index": {}}'
+          - '{"title": "Elasticsearch in Action", "suggestions": {"input": "ELK in Action", "contexts": {"format": "ebook"}}}'
+          - '{"index": {}}'
+          - '{"title": "Elasticsearch - The Definitive Guide", "suggestions": {"input": ["Elasticsearch in Action"]}}'
+
+---
+"Test typed keys parameter for suggesters":
+  - skip:
+      version: " - 6.99.99"
+      reason: queying a context suggester with no context was deprecated in 7.0
+      features: "warnings"
+
+  - do:
+      warnings:
+        - "The ability to query with no context on a context enabled completion field is deprecated and will be removed in the next major release."
+      search:
+        typed_keys: true
+        body:
+          query:
+            match_all: {}
+          suggest:
+            text: "Elastic"
+            term_suggester:
+              term:
+                field: title
+            completion_suggester:
+              prefix: "Elastic"
+              completion:
+                field: suggestions
+            context_suggester:
+              prefix: "Elastic"
+              completion:
+                field: suggestions
+                contexts:
+                  format: "ebook"
+            phrase_suggester:
+              phrase:
+                field: title
+
+  - is_true: suggest.term#term_suggester
+  - is_true: suggest.completion#completion_suggester
+  - is_true: suggest.completion#context_suggester
+  - is_true: suggest.phrase#phrase_suggester

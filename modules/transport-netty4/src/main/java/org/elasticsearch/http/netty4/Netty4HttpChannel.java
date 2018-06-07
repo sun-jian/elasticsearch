@@ -29,7 +29,6 @@ import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.FullHttpResponse;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaderValues;
-import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpResponse;
 import io.netty.handler.codec.http.HttpResponseStatus;
@@ -41,8 +40,8 @@ import org.elasticsearch.common.io.stream.BytesStreamOutput;
 import org.elasticsearch.common.io.stream.ReleasableBytesStreamOutput;
 import org.elasticsearch.common.lease.Releasable;
 import org.elasticsearch.common.util.concurrent.ThreadContext;
+import org.elasticsearch.http.HttpHandlingSettings;
 import org.elasticsearch.http.netty4.cors.Netty4CorsHandler;
-import org.elasticsearch.http.netty4.pipelining.HttpPipelinedRequest;
 import org.elasticsearch.rest.AbstractRestChannel;
 import org.elasticsearch.rest.RestResponse;
 import org.elasticsearch.rest.RestStatus;
@@ -59,29 +58,26 @@ final class Netty4HttpChannel extends AbstractRestChannel {
     private final Netty4HttpServerTransport transport;
     private final Channel channel;
     private final FullHttpRequest nettyRequest;
-    private final HttpPipelinedRequest pipelinedRequest;
+    private final int sequence;
     private final ThreadContext threadContext;
+    private final HttpHandlingSettings handlingSettings;
 
     /**
-     * @param transport             The corresponding <code>NettyHttpServerTransport</code> where this channel belongs to.
-     * @param request               The request that is handled by this channel.
-     * @param pipelinedRequest      If HTTP pipelining is enabled provide the corresponding pipelined request. May be null if
-     *                              HTTP pipelining is disabled.
-     * @param detailedErrorsEnabled true iff error messages should include stack traces.
-     * @param threadContext         the thread context for the channel
+     * @param transport        The corresponding <code>NettyHttpServerTransport</code> where this channel belongs to.
+     * @param request          The request that is handled by this channel.
+     * @param sequence         The pipelining sequence number for this request
+     * @param handlingSettings true if error messages should include stack traces.
+     * @param threadContext    the thread context for the channel
      */
-    Netty4HttpChannel(
-            final Netty4HttpServerTransport transport,
-            final Netty4HttpRequest request,
-            final HttpPipelinedRequest pipelinedRequest,
-            final boolean detailedErrorsEnabled,
-            final ThreadContext threadContext) {
-        super(request, detailedErrorsEnabled);
+    Netty4HttpChannel(Netty4HttpServerTransport transport, Netty4HttpRequest request, int sequence, HttpHandlingSettings handlingSettings,
+                      ThreadContext threadContext) {
+        super(request, handlingSettings.getDetailedErrorsEnabled());
         this.transport = transport;
         this.channel = request.getChannel();
         this.nettyRequest = request.request();
-        this.pipelinedRequest = pipelinedRequest;
+        this.sequence = sequence;
         this.threadContext = threadContext;
+        this.handlingSettings = handlingSettings;
     }
 
     @Override
@@ -127,7 +123,7 @@ final class Netty4HttpChannel extends AbstractRestChannel {
             final ChannelPromise promise = channel.newPromise();
 
             if (releaseContent) {
-                promise.addListener(f -> ((Releasable)content).close());
+                promise.addListener(f -> ((Releasable) content).close());
             }
 
             if (releaseBytesStreamOutput) {
@@ -138,13 +134,9 @@ final class Netty4HttpChannel extends AbstractRestChannel {
                 promise.addListener(ChannelFutureListener.CLOSE);
             }
 
-            final Object msg;
-            if (pipelinedRequest != null) {
-                msg = pipelinedRequest.createHttpResponse(resp, promise);
-            } else {
-                msg = resp;
-            }
-            channel.writeAndFlush(msg, promise);
+            Netty4HttpResponse newResponse = new Netty4HttpResponse(sequence, resp);
+
+            channel.writeAndFlush(newResponse, promise);
             releaseContent = false;
             releaseBytesStreamOutput = false;
         } finally {
@@ -153,9 +145,6 @@ final class Netty4HttpChannel extends AbstractRestChannel {
             }
             if (releaseBytesStreamOutput) {
                 bytesOutputOrNull().close();
-            }
-            if (pipelinedRequest != null) {
-                pipelinedRequest.release();
             }
         }
     }
@@ -171,8 +160,8 @@ final class Netty4HttpChannel extends AbstractRestChannel {
     }
 
     private void addCookies(HttpResponse resp) {
-        if (transport.resetCookies) {
-            String cookieString = nettyRequest.headers().get(HttpHeaders.Names.COOKIE);
+        if (handlingSettings.isResetCookies()) {
+            String cookieString = nettyRequest.headers().get(HttpHeaderNames.COOKIE);
             if (cookieString != null) {
                 Set<io.netty.handler.codec.http.cookie.Cookie> cookies = ServerCookieDecoder.STRICT.decode(cookieString);
                 if (!cookies.isEmpty()) {
@@ -223,8 +212,6 @@ final class Netty4HttpChannel extends AbstractRestChannel {
         return response;
     }
 
-    private static final HttpResponseStatus TOO_MANY_REQUESTS = new HttpResponseStatus(429, "Too Many Requests");
-
     private static Map<RestStatus, HttpResponseStatus> MAP;
 
     static {
@@ -267,7 +254,7 @@ final class Netty4HttpChannel extends AbstractRestChannel {
         map.put(RestStatus.UNPROCESSABLE_ENTITY, HttpResponseStatus.BAD_REQUEST);
         map.put(RestStatus.LOCKED, HttpResponseStatus.BAD_REQUEST);
         map.put(RestStatus.FAILED_DEPENDENCY, HttpResponseStatus.BAD_REQUEST);
-        map.put(RestStatus.TOO_MANY_REQUESTS, TOO_MANY_REQUESTS);
+        map.put(RestStatus.TOO_MANY_REQUESTS, HttpResponseStatus.TOO_MANY_REQUESTS);
         map.put(RestStatus.INTERNAL_SERVER_ERROR, HttpResponseStatus.INTERNAL_SERVER_ERROR);
         map.put(RestStatus.NOT_IMPLEMENTED, HttpResponseStatus.NOT_IMPLEMENTED);
         map.put(RestStatus.BAD_GATEWAY, HttpResponseStatus.BAD_GATEWAY);
@@ -280,5 +267,4 @@ final class Netty4HttpChannel extends AbstractRestChannel {
     private static HttpResponseStatus getStatus(RestStatus status) {
         return MAP.getOrDefault(status, HttpResponseStatus.INTERNAL_SERVER_ERROR);
     }
-
 }

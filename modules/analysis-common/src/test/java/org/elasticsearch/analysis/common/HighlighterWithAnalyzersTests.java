@@ -21,6 +21,7 @@ package org.elasticsearch.analysis.common;
 
 import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.index.IndexSettings;
 import org.elasticsearch.index.query.Operator;
 import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.search.fetch.subphase.highlight.HighlightBuilder;
@@ -66,12 +67,13 @@ public class HighlighterWithAnalyzersTests extends ESIntegTestCase {
                         .endObject())
                 .setSettings(Settings.builder()
                         .put(indexSettings())
+                        .put(IndexSettings.MAX_NGRAM_DIFF_SETTING.getKey(), 19)
                         .put("analysis.tokenizer.autocomplete.max_gram", 20)
                         .put("analysis.tokenizer.autocomplete.min_gram", 1)
                         .put("analysis.tokenizer.autocomplete.token_chars", "letter,digit")
                         .put("analysis.tokenizer.autocomplete.type", "nGram")
                         .put("analysis.filter.wordDelimiter.type", "word_delimiter")
-                        .putArray("analysis.filter.wordDelimiter.type_table",
+                        .putList("analysis.filter.wordDelimiter.type_table",
                                 "& => ALPHANUM", "| => ALPHANUM", "! => ALPHANUM",
                                 "? => ALPHANUM", ". => ALPHANUM", "- => ALPHANUM",
                                 "# => ALPHANUM", "% => ALPHANUM", "+ => ALPHANUM",
@@ -88,10 +90,10 @@ public class HighlighterWithAnalyzersTests extends ESIntegTestCase {
                         .put("analysis.filter.wordDelimiter.catenate_all", false)
 
                         .put("analysis.analyzer.autocomplete.tokenizer", "autocomplete")
-                        .putArray("analysis.analyzer.autocomplete.filter",
+                        .putList("analysis.analyzer.autocomplete.filter",
                                 "lowercase", "wordDelimiter")
                         .put("analysis.analyzer.search_autocomplete.tokenizer", "whitespace")
-                        .putArray("analysis.analyzer.search_autocomplete.filter",
+                        .putList("analysis.analyzer.search_autocomplete.filter",
                                 "lowercase", "wordDelimiter")));
         client().prepareIndex("test", "test", "1")
             .setSource("name", "ARCOTEL Hotels Deutschland").get();
@@ -121,7 +123,7 @@ public class HighlighterWithAnalyzersTests extends ESIntegTestCase {
                                 .put("analysis.filter.wordDelimiter.catenate_numbers", true)
                                 .put("analysis.filter.wordDelimiter.catenate_all", false)
                                 .put("analysis.analyzer.custom_analyzer.tokenizer", "whitespace")
-                                .putArray("analysis.analyzer.custom_analyzer.filter",
+                                .putList("analysis.analyzer.custom_analyzer.filter",
                                         "lowercase", "wordDelimiter"))
         );
 
@@ -136,7 +138,7 @@ public class HighlighterWithAnalyzersTests extends ESIntegTestCase {
         refresh();
         SearchResponse search = client().prepareSearch()
                 .setQuery(matchPhraseQuery("body", "Test: http://www.facebook.com "))
-                .highlighter(new HighlightBuilder().field("body")).get();
+                .highlighter(new HighlightBuilder().field("body").highlighterType("fvh")).get();
         assertHighlight(search, 0, "body", 0, startsWith("<em>Test: http://www.facebook.com</em>"));
         search = client()
                 .prepareSearch()
@@ -146,7 +148,7 @@ public class HighlighterWithAnalyzersTests extends ESIntegTestCase {
                         + "feature Test: http://www.facebook.com http://elasticsearch.org "
                         + "http://xing.com http://cnn.com http://quora.com http://twitter.com this "
                         + "is a test for highlighting feature"))
-                .highlighter(new HighlightBuilder().field("body")).execute().actionGet();
+                .highlighter(new HighlightBuilder().field("body").highlighterType("fvh")).execute().actionGet();
         assertHighlight(search, 0, "body", 0, equalTo("<em>Test</em>: "
                 + "<em>http://www.facebook.com</em> <em>http://elasticsearch.org</em> "
                 + "<em>http://xing.com</em> <em>http://cnn.com</em> http://quora.com"));

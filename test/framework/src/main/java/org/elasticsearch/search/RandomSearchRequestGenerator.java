@@ -22,8 +22,10 @@ package org.elasticsearch.search;
 import org.elasticsearch.action.search.SearchRequest;
 import org.elasticsearch.action.search.SearchType;
 import org.elasticsearch.action.support.IndicesOptions;
+import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.text.Text;
 import org.elasticsearch.common.unit.TimeValue;
+import org.elasticsearch.common.xcontent.DeprecationHandler;
 import org.elasticsearch.common.xcontent.NamedXContentRegistry;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentFactory;
@@ -37,7 +39,7 @@ import org.elasticsearch.search.builder.SearchSourceBuilder;
 import org.elasticsearch.search.collapse.CollapseBuilder;
 import org.elasticsearch.search.fetch.subphase.FetchSourceContext;
 import org.elasticsearch.search.fetch.subphase.highlight.HighlightBuilder;
-import org.elasticsearch.search.rescore.RescoreBuilder;
+import org.elasticsearch.search.rescore.RescorerBuilder;
 import org.elasticsearch.search.searchafter.SearchAfterBuilder;
 import org.elasticsearch.search.slice.SliceBuilder;
 import org.elasticsearch.search.sort.ScriptSortBuilder;
@@ -80,8 +82,9 @@ public class RandomSearchRequestGenerator {
      * @param randomSearchSourceBuilder builds a random {@link SearchSourceBuilder}. You can use
      *        {@link #randomSearchSourceBuilder(Supplier, Supplier, Supplier, Supplier, Supplier)}.
      */
-    public static SearchRequest randomSearchRequest(Supplier<SearchSourceBuilder> randomSearchSourceBuilder) throws IOException {
+    public static SearchRequest randomSearchRequest(Supplier<SearchSourceBuilder> randomSearchSourceBuilder) {
         SearchRequest searchRequest = new SearchRequest();
+        searchRequest.allowPartialSearchResults(true);
         if (randomBoolean()) {
             searchRequest.indices(generateRandomStringArray(10, 10, false, false));
         }
@@ -104,7 +107,7 @@ public class RandomSearchRequestGenerator {
             searchRequest.scroll(randomPositiveTimeValue());
         }
         if (randomBoolean()) {
-            searchRequest.searchType(randomFrom(SearchType.values()));
+            searchRequest.searchType(randomFrom(SearchType.DFS_QUERY_THEN_FETCH, SearchType.QUERY_THEN_FETCH));
         }
         if (randomBoolean()) {
             searchRequest.source(randomSearchSourceBuilder.get());
@@ -115,7 +118,7 @@ public class RandomSearchRequestGenerator {
     public static SearchSourceBuilder randomSearchSourceBuilder(
             Supplier<HighlightBuilder> randomHighlightBuilder,
             Supplier<SuggestBuilder> randomSuggestBuilder,
-            Supplier<RescoreBuilder<?>> randomRescoreBuilder,
+            Supplier<RescorerBuilder<?>> randomRescoreBuilder,
             Supplier<List<SearchExtBuilder>> randomExtBuilders,
             Supplier<CollapseBuilder> randomCollapseBuilder) {
         SearchSourceBuilder builder = new SearchSourceBuilder();
@@ -142,6 +145,9 @@ public class RandomSearchRequestGenerator {
         }
         if (randomBoolean()) {
             builder.terminateAfter(randomIntBetween(1, 100000));
+        }
+        if (randomBoolean()) {
+            builder.trackTotalHits(randomBoolean());
         }
 
         switch(randomInt(2)) {
@@ -305,8 +311,9 @@ public class RandomSearchRequestGenerator {
                 }
                 jsonBuilder.endArray();
                 jsonBuilder.endObject();
-                XContentParser parser = XContentFactory.xContent(XContentType.JSON).createParser(NamedXContentRegistry.EMPTY,
-                        jsonBuilder.bytes());
+                XContentParser parser = XContentFactory.xContent(XContentType.JSON)
+                    .createParser(NamedXContentRegistry.EMPTY, DeprecationHandler.THROW_UNSUPPORTED_OPERATION,
+                        BytesReference.bytes(jsonBuilder).streamInput());
                 parser.nextToken();
                 parser.nextToken();
                 parser.nextToken();

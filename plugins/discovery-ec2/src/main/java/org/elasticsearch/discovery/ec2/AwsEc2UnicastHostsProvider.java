@@ -65,7 +65,7 @@ class AwsEc2UnicastHostsProvider extends AbstractComponent implements UnicastHos
 
     private final Set<String> groups;
 
-    private final Map<String, String> tags;
+    private final Map<String, List<String>> tags;
 
     private final Set<String> availabilityZones;
 
@@ -85,7 +85,7 @@ class AwsEc2UnicastHostsProvider extends AbstractComponent implements UnicastHos
         this.groups = new HashSet<>();
         this.groups.addAll(AwsEc2Service.GROUPS_SETTING.get(settings));
 
-        this.tags = AwsEc2Service.TAG_SETTING.get(settings).getAsMap();
+        this.tags = AwsEc2Service.TAG_SETTING.getAsMap(settings);
 
         this.availabilityZones = new HashSet<>();
         availabilityZones.addAll(AwsEc2Service.AVAILABILITY_ZONES_SETTING.get(settings));
@@ -125,8 +125,8 @@ class AwsEc2UnicastHostsProvider extends AbstractComponent implements UnicastHos
                 // lets see if we can filter based on groups
                 if (!groups.isEmpty()) {
                     List<GroupIdentifier> instanceSecurityGroups = instance.getSecurityGroups();
-                    ArrayList<String> securityGroupNames = new ArrayList<String>();
-                    ArrayList<String> securityGroupIds = new ArrayList<String>();
+                    List<String> securityGroupNames = new ArrayList<>(instanceSecurityGroups.size());
+                    List<String> securityGroupIds = new ArrayList<>(instanceSecurityGroups.size());
                     for (GroupIdentifier sg : instanceSecurityGroups) {
                         securityGroupNames.add(sg.getGroupName());
                         securityGroupIds.add(sg.getGroupId());
@@ -206,7 +206,7 @@ class AwsEc2UnicastHostsProvider extends AbstractComponent implements UnicastHos
                 new Filter("instance-state-name").withValues("running", "pending")
             );
 
-        for (Map.Entry<String, String> tagFilter : tags.entrySet()) {
+        for (Map.Entry<String, List<String>> tagFilter : tags.entrySet()) {
             // for a given tag key, OR relationship for multiple different values
             describeInstancesRequest.withFilters(
                 new Filter("tag:" + tagFilter.getKey()).withValues(tagFilter.getValue())
