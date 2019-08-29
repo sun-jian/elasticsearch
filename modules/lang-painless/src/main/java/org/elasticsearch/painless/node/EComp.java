@@ -20,14 +20,15 @@
 package org.elasticsearch.painless.node;
 
 import org.elasticsearch.painless.AnalyzerCaster;
+import org.elasticsearch.painless.CompilerSettings;
 import org.elasticsearch.painless.DefBootstrap;
-import org.elasticsearch.painless.Definition;
-import org.elasticsearch.painless.Definition.def;
 import org.elasticsearch.painless.Globals;
 import org.elasticsearch.painless.Locals;
 import org.elasticsearch.painless.Location;
 import org.elasticsearch.painless.MethodWriter;
 import org.elasticsearch.painless.Operation;
+import org.elasticsearch.painless.lookup.PainlessLookupUtility;
+import org.elasticsearch.painless.lookup.def;
 import org.objectweb.asm.Label;
 import org.objectweb.asm.Type;
 
@@ -54,6 +55,12 @@ public final class EComp extends AExpression {
         this.operation = Objects.requireNonNull(operation);
         this.left = Objects.requireNonNull(left);
         this.right = Objects.requireNonNull(right);
+    }
+
+    @Override
+    void storeSettings(CompilerSettings settings) {
+        left.storeSettings(settings);
+        right.storeSettings(settings);
     }
 
     @Override
@@ -93,7 +100,8 @@ public final class EComp extends AExpression {
 
         if (promotedType == null) {
             throw createError(new ClassCastException("Cannot apply equals [==] to types " +
-                "[" + Definition.ClassToName(left.actual) + "] and [" + Definition.ClassToName(right.actual) + "]."));
+                    "[" + PainlessLookupUtility.typeToCanonicalTypeName(left.actual) + "] and " +
+                    "[" + PainlessLookupUtility.typeToCanonicalTypeName(right.actual) + "]."));
         }
 
         if (promotedType == def.class) {
@@ -142,7 +150,8 @@ public final class EComp extends AExpression {
 
         if (promotedType == null) {
             throw createError(new ClassCastException("Cannot apply reference equals [===] to types " +
-                "[" + Definition.ClassToName(left.actual) + "] and [" + Definition.ClassToName(right.actual) + "]."));
+                    "[" + PainlessLookupUtility.typeToCanonicalTypeName(left.actual) + "] and " +
+                    "[" + PainlessLookupUtility.typeToCanonicalTypeName(right.actual) + "]."));
         }
 
         left.expected = promotedType;
@@ -182,7 +191,8 @@ public final class EComp extends AExpression {
 
         if (promotedType == null) {
             throw createError(new ClassCastException("Cannot apply not equals [!=] to types " +
-                "[" + Definition.ClassToName(left.actual) + "] and [" + Definition.ClassToName(right.actual) + "]."));
+                    "[" + PainlessLookupUtility.typeToCanonicalTypeName(left.actual) + "] and " +
+                    "[" + PainlessLookupUtility.typeToCanonicalTypeName(right.actual) + "]."));
         }
 
         if (promotedType == def.class) {
@@ -231,7 +241,8 @@ public final class EComp extends AExpression {
 
         if (promotedType == null) {
             throw createError(new ClassCastException("Cannot apply reference not equals [!==] to types " +
-                "[" + Definition.ClassToName(left.actual) + "] and [" + Definition.ClassToName(right.actual) + "]."));
+                    "[" + PainlessLookupUtility.typeToCanonicalTypeName(left.actual) + "] and " +
+                    "[" + PainlessLookupUtility.typeToCanonicalTypeName(right.actual) + "]."));
         }
 
         left.expected = promotedType;
@@ -271,7 +282,8 @@ public final class EComp extends AExpression {
 
         if (promotedType == null) {
             throw createError(new ClassCastException("Cannot apply greater than or equals [>=] to types " +
-                "[" + Definition.ClassToName(left.actual) + "] and [" + Definition.ClassToName(right.actual) + "]."));
+                    "[" + PainlessLookupUtility.typeToCanonicalTypeName(left.actual) + "] and " +
+                    "[" + PainlessLookupUtility.typeToCanonicalTypeName(right.actual) + "]."));
         }
 
         if (promotedType == def.class) {
@@ -310,7 +322,8 @@ public final class EComp extends AExpression {
 
         if (promotedType == null) {
             throw createError(new ClassCastException("Cannot apply greater than [>] to types " +
-                "[" + Definition.ClassToName(left.actual) + "] and [" + Definition.ClassToName(right.actual) + "]."));
+                    "[" + PainlessLookupUtility.typeToCanonicalTypeName(left.actual) + "] and " +
+                    "[" + PainlessLookupUtility.typeToCanonicalTypeName(right.actual) + "]."));
         }
 
         if (promotedType == def.class) {
@@ -349,7 +362,8 @@ public final class EComp extends AExpression {
 
         if (promotedType == null) {
             throw createError(new ClassCastException("Cannot apply less than or equals [<=] to types " +
-                "[" + Definition.ClassToName(left.actual) + "] and [" + Definition.ClassToName(right.actual) + "]."));
+                    "[" + PainlessLookupUtility.typeToCanonicalTypeName(left.actual) + "] and " +
+                    "[" + PainlessLookupUtility.typeToCanonicalTypeName(right.actual) + "]."));
         }
 
         if (promotedType == def.class) {
@@ -388,7 +402,8 @@ public final class EComp extends AExpression {
 
         if (promotedType == null) {
             throw createError(new ClassCastException("Cannot apply less than [>=] to types " +
-                "[" + Definition.ClassToName(left.actual) + "] and [" + Definition.ClassToName(right.actual) + "]."));
+                    "[" + PainlessLookupUtility.typeToCanonicalTypeName(left.actual) + "] and " +
+                    "[" + PainlessLookupUtility.typeToCanonicalTypeName(right.actual) + "]."));
         }
 
         if (promotedType == def.class) {

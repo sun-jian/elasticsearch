@@ -33,7 +33,6 @@ import org.elasticsearch.common.xcontent.XContentParser;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.List;
@@ -114,7 +113,7 @@ public class RepositoriesMetaData extends AbstractNamedDiffable<Custom> implemen
         for (int i = 0; i < repository.length; i++) {
             repository[i] = new RepositoryMetaData(in);
         }
-        this.repositories = Collections.unmodifiableList(Arrays.asList(repository));
+        this.repositories = List.of(repository);
     }
 
     public static NamedDiff<Custom> readDiffFrom(StreamInput in) throws  IOException {
@@ -157,7 +156,8 @@ public class RepositoriesMetaData extends AbstractNamedDiffable<Custom> implemen
                             }
                             settings = Settings.fromXContent(parser);
                         } else {
-                            throw new ElasticsearchParseException("failed to parse repository [{}], unknown field [{}]", name, currentFieldName);
+                            throw new ElasticsearchParseException("failed to parse repository [{}], unknown field [{}]",
+                                name, currentFieldName);
                         }
                     } else {
                         throw new ElasticsearchParseException("failed to parse repository [{}]", name);

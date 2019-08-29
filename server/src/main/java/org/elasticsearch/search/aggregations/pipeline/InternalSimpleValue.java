@@ -35,7 +35,7 @@ public class InternalSimpleValue extends InternalNumericMetricsAggregation.Singl
     public static final String NAME = "simple_value";
     protected final double value;
 
-    public InternalSimpleValue(String name, double value, DocValueFormat formatter, List<PipelineAggregator> pipelineAggregators,
+    InternalSimpleValue(String name, double value, DocValueFormat formatter, List<PipelineAggregator> pipelineAggregators,
             Map<String, Object> metaData) {
         super(name, pipelineAggregators, metaData);
         this.format = formatter;
@@ -91,12 +91,15 @@ public class InternalSimpleValue extends InternalNumericMetricsAggregation.Singl
     }
 
     @Override
-    protected int doHashCode() {
-        return Objects.hash(value);
+    public int hashCode() {
+        return Objects.hash(super.hashCode(), value);
     }
 
     @Override
-    protected boolean doEquals(Object obj) {
+    public boolean equals(Object obj) {
+        if (this == obj) return true;
+        if (obj == null || getClass() != obj.getClass()) return false;
+        if (super.equals(obj) == false) return false;
         InternalSimpleValue other = (InternalSimpleValue) obj;
         return Objects.equals(value, other.value);
     }

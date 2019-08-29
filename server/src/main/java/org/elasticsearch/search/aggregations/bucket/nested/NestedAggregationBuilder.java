@@ -28,7 +28,6 @@ import org.elasticsearch.index.mapper.ObjectMapper;
 import org.elasticsearch.search.aggregations.AbstractAggregationBuilder;
 import org.elasticsearch.search.aggregations.AggregationBuilder;
 import org.elasticsearch.search.aggregations.AggregationExecutionException;
-import org.elasticsearch.search.aggregations.AggregatorFactories;
 import org.elasticsearch.search.aggregations.AggregatorFactories.Builder;
 import org.elasticsearch.search.aggregations.AggregatorFactory;
 import org.elasticsearch.search.internal.SearchContext;
@@ -88,7 +87,7 @@ public class NestedAggregationBuilder extends AbstractAggregationBuilder<NestedA
     }
 
     @Override
-    protected AggregatorFactory<?> doBuild(SearchContext context, AggregatorFactory<?> parent, Builder subFactoriesBuilder)
+    protected AggregatorFactory doBuild(SearchContext context, AggregatorFactory parent, Builder subFactoriesBuilder)
             throws IOException {
         ObjectMapper childObjectMapper = context.getObjectMapper(path);
         if (childObjectMapper == null) {
@@ -144,14 +143,16 @@ public class NestedAggregationBuilder extends AbstractAggregationBuilder<NestedA
         return new NestedAggregationBuilder(aggregationName, path);
     }
 
-
     @Override
-    protected int doHashCode() {
-        return Objects.hash(path);
+    public int hashCode() {
+        return Objects.hash(super.hashCode(), path);
     }
 
     @Override
-    protected boolean doEquals(Object obj) {
+    public boolean equals(Object obj) {
+        if (this == obj) return true;
+        if (obj == null || getClass() != obj.getClass()) return false;
+        if (super.equals(obj) == false) return false;
         NestedAggregationBuilder other = (NestedAggregationBuilder) obj;
         return Objects.equals(path, other.path);
     }

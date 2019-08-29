@@ -5,6 +5,24 @@
  */
 package org.elasticsearch.xpack.security.authc;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.elasticsearch.action.ActionListener;
+import org.elasticsearch.common.collect.MapBuilder;
+import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.util.concurrent.CountDown;
+import org.elasticsearch.common.util.concurrent.ThreadContext;
+import org.elasticsearch.env.Environment;
+import org.elasticsearch.license.XPackLicenseState;
+import org.elasticsearch.license.XPackLicenseState.AllowedRealmType;
+import org.elasticsearch.xpack.core.security.authc.Realm;
+import org.elasticsearch.xpack.core.security.authc.RealmConfig;
+import org.elasticsearch.xpack.core.security.authc.RealmSettings;
+import org.elasticsearch.xpack.core.security.authc.esnative.NativeRealmSettings;
+import org.elasticsearch.xpack.core.security.authc.file.FileRealmSettings;
+import org.elasticsearch.xpack.core.security.authc.kerberos.KerberosRealmSettings;
+import org.elasticsearch.xpack.security.authc.esnative.ReservedRealm;
+
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -20,28 +38,14 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
-import org.elasticsearch.action.ActionListener;
-import org.elasticsearch.common.collect.MapBuilder;
-import org.elasticsearch.common.component.AbstractComponent;
-import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.common.util.concurrent.CountDown;
-import org.elasticsearch.common.util.concurrent.ThreadContext;
-import org.elasticsearch.env.Environment;
-import org.elasticsearch.license.XPackLicenseState;
-import org.elasticsearch.license.XPackLicenseState.AllowedRealmType;
-import org.elasticsearch.xpack.core.security.authc.Realm;
-import org.elasticsearch.xpack.core.security.authc.RealmConfig;
-import org.elasticsearch.xpack.core.security.authc.RealmSettings;
-import org.elasticsearch.xpack.core.security.authc.esnative.NativeRealmSettings;
-import org.elasticsearch.xpack.security.authc.esnative.ReservedRealm;
-import org.elasticsearch.xpack.core.security.authc.file.FileRealmSettings;
-
-
 /**
  * Serves as a realms registry (also responsible for ordering the realms appropriately)
  */
-public class Realms extends AbstractComponent implements Iterable<Realm> {
+public class Realms implements Iterable<Realm> {
 
+    private static final Logger logger = LogManager.getLogger(Realms.class);
+
+    private final Settings settings;
     private final Environment env;
     private final Map<String, Realm.Factory> factories;
     private final XPackLicenseState licenseState;
@@ -57,7 +61,7 @@ public class Realms extends AbstractComponent implements Iterable<Realm> {
 
     public Realms(Settings settings, Environment env, Map<String, Realm.Factory> factories, XPackLicenseState licenseState,
                   ThreadContext threadContext, ReservedRealm reservedRealm) throws Exception {
-        super(settings);
+        this.settings = settings;
         this.env = env;
         this.factories = factories;
         this.licenseState = licenseState;
@@ -92,11 +96,12 @@ public class Realms extends AbstractComponent implements Iterable<Realm> {
 
         this.standardRealmsOnly = Collections.unmodifiableList(standardRealms);
         this.nativeRealmsOnly = Collections.unmodifiableList(nativeRealms);
+        realms.forEach(r -> r.initialize(this, licenseState));
     }
 
     @Override
     public Iterator<Realm> iterator() {
-        if (licenseState.isSecurityEnabled() == false || licenseState.isAuthAllowed() == false) {
+        if (licenseState.isAuthAllowed() == false) {
             return Collections.emptyIterator();
         }
 
@@ -113,12 +118,38 @@ public class Realms extends AbstractComponent implements Iterable<Realm> {
         }
     }
 
+    /**
+     * Returns a list of realms that are configured, but are not permitted under the current license.
+     */
+    public List<Realm> getUnlicensedRealms() {
+        // If auth is not allowed, then everything is unlicensed
+        if (licenseState.isAuthAllowed() == false) {
+            return Collections.unmodifiableList(realms);
+        }
+
+        AllowedRealmType allowedRealmType = licenseState.allowedRealmType();
+        // If all realms are allowed, then nothing is unlicensed
+        if (allowedRealmType == AllowedRealmType.ALL) {
+            return Collections.emptyList();
+        }
+
+        final List<Realm> allowedRealms = this.asList();
+        // Shortcut for the typical case, all the configured realms are allowed
+        if (allowedRealms.equals(this.realms)) {
+            return Collections.emptyList();
+        }
+
+        // Otherwise, we return anything in "all realms" that is not in the allowed realm list
+        List<Realm> unlicensed = realms.stream().filter(r -> allowedRealms.contains(r) == false).collect(Collectors.toList());
+        return Collections.unmodifiableList(unlicensed);
+    }
+
     public Stream<Realm> stream() {
         return StreamSupport.stream(this.spliterator(), false);
     }
 
     public List<Realm> asList() {
-        if (licenseState.isSecurityEnabled() == false || licenseState.isAuthAllowed() == false) {
+        if (licenseState.isAuthAllowed() == false) {
             return Collections.emptyList();
         }
 
@@ -149,34 +180,38 @@ public class Realms extends AbstractComponent implements Iterable<Realm> {
     }
 
     protected List<Realm> initRealms() throws Exception {
-        Settings realmsSettings = RealmSettings.get(settings);
+        Map<RealmConfig.RealmIdentifier, Settings> realmsSettings = RealmSettings.getRealmSettings(settings);
         Set<String> internalTypes = new HashSet<>();
         List<Realm> realms = new ArrayList<>();
-        for (String name : realmsSettings.names()) {
-            Settings realmSettings = realmsSettings.getAsSettings(name);
-            String type = realmSettings.get("type");
-            if (type == null) {
-                throw new IllegalArgumentException("missing realm type for [" + name + "] realm");
-            }
-            Realm.Factory factory = factories.get(type);
+        List<String> kerberosRealmNames = new ArrayList<>();
+        for (RealmConfig.RealmIdentifier identifier: realmsSettings.keySet()) {
+            Realm.Factory factory = factories.get(identifier.getType());
             if (factory == null) {
-                throw new IllegalArgumentException("unknown realm type [" + type + "] set for realm [" + name + "]");
+                throw new IllegalArgumentException("unknown realm type [" + identifier.getType() + "] for realm [" + identifier + "]");
             }
-            RealmConfig config = new RealmConfig(name, realmSettings, settings, env, threadContext);
+            RealmConfig config = new RealmConfig(identifier, settings, env, threadContext);
             if (!config.enabled()) {
                 if (logger.isDebugEnabled()) {
-                    logger.debug("realm [{}/{}] is disabled", type, name);
+                    logger.debug("realm [{}] is disabled", identifier);
                 }
                 continue;
             }
-            if (FileRealmSettings.TYPE.equals(type) || NativeRealmSettings.TYPE.equals(type)) {
+            if (FileRealmSettings.TYPE.equals(identifier.getType()) || NativeRealmSettings.TYPE.equals(identifier.getType())) {
                 // this is an internal realm factory, let's make sure we didn't already registered one
                 // (there can only be one instance of an internal realm)
-                if (internalTypes.contains(type)) {
-                    throw new IllegalArgumentException("multiple [" + type + "] realms are configured. [" + type +
-                            "] is an internal realm and therefore there can only be one such realm configured");
+                if (internalTypes.contains(identifier.getType())) {
+                    throw new IllegalArgumentException("multiple [" + identifier.getType() + "] realms are configured. ["
+                            + identifier.getType() + "] is an internal realm and therefore there can only be one such realm configured");
                 }
-                internalTypes.add(type);
+                internalTypes.add(identifier.getType());
+            }
+            if (KerberosRealmSettings.TYPE.equals(identifier.getType())) {
+                kerberosRealmNames.add(identifier.getName());
+                if (kerberosRealmNames.size() > 1) {
+                    throw new IllegalArgumentException("multiple realms " + kerberosRealmNames.toString() + " configured of type ["
+                        + identifier.getType() + "], [" + identifier.getType() + "] can only have one such realm " +
+                        "configured");
+                }
             }
             realms.add(factory.create(config));
         }
@@ -258,13 +293,14 @@ public class Realms extends AbstractComponent implements Iterable<Realm> {
     private void addNativeRealms(List<Realm> realms) throws Exception {
         Realm.Factory fileRealm = factories.get(FileRealmSettings.TYPE);
         if (fileRealm != null) {
-
-            realms.add(fileRealm.create(new RealmConfig("default_" + FileRealmSettings.TYPE, Settings.EMPTY,
+            realms.add(fileRealm.create(new RealmConfig(
+                    new RealmConfig.RealmIdentifier(FileRealmSettings.TYPE, "default_" + FileRealmSettings.TYPE),
                     settings, env, threadContext)));
         }
         Realm.Factory indexRealmFactory = factories.get(NativeRealmSettings.TYPE);
         if (indexRealmFactory != null) {
-            realms.add(indexRealmFactory.create(new RealmConfig("default_" + NativeRealmSettings.TYPE, Settings.EMPTY,
+            realms.add(indexRealmFactory.create(new RealmConfig(
+                    new RealmConfig.RealmIdentifier(NativeRealmSettings.TYPE, "default_" + NativeRealmSettings.TYPE),
                     settings, env, threadContext)));
         }
     }

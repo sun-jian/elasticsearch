@@ -21,6 +21,7 @@ package org.elasticsearch.search.aggregations.bucket.filter;
 
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.Query;
+import org.apache.lucene.search.ScoreMode;
 import org.apache.lucene.search.Weight;
 import org.elasticsearch.search.aggregations.AggregationInitializationException;
 import org.elasticsearch.search.aggregations.Aggregator;
@@ -34,7 +35,7 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 
-public class FiltersAggregatorFactory extends AggregatorFactory<FiltersAggregatorFactory> {
+public class FiltersAggregatorFactory extends AggregatorFactory {
 
     private final String[] keys;
     private final Query[] filters;
@@ -44,7 +45,7 @@ public class FiltersAggregatorFactory extends AggregatorFactory<FiltersAggregato
     private final String otherBucketKey;
 
     public FiltersAggregatorFactory(String name, List<KeyedFilter> filters, boolean keyed, boolean otherBucket,
-            String otherBucketKey, SearchContext context, AggregatorFactory<?> parent, AggregatorFactories.Builder subFactories,
+            String otherBucketKey, SearchContext context, AggregatorFactory parent, AggregatorFactories.Builder subFactories,
             Map<String, Object> metaData) throws IOException {
         super(name, context, parent, subFactories, metaData);
         this.keyed = keyed;
@@ -55,7 +56,7 @@ public class FiltersAggregatorFactory extends AggregatorFactory<FiltersAggregato
         for (int i = 0; i < filters.size(); ++i) {
             KeyedFilter keyedFilter = filters.get(i);
             this.keys[i] = keyedFilter.key();
-            this.filters[i] = keyedFilter.filter().toFilter(context.getQueryShardContext());
+            this.filters[i] = keyedFilter.filter().toQuery(context.getQueryShardContext());
         }
     }
 
@@ -74,7 +75,7 @@ public class FiltersAggregatorFactory extends AggregatorFactory<FiltersAggregato
                 IndexSearcher contextSearcher = context.searcher();
                 weights = new Weight[filters.length];
                 for (int i = 0; i < filters.length; ++i) {
-                    this.weights[i] = contextSearcher.createNormalizedWeight(filters[i], false);
+                    this.weights[i] = contextSearcher.createWeight(contextSearcher.rewrite(filters[i]), ScoreMode.COMPLETE_NO_SCORES, 1);
                 }
             } catch (IOException e) {
                 throw new AggregationInitializationException("Failed to initialse filters for aggregation [" + name() + "]", e);

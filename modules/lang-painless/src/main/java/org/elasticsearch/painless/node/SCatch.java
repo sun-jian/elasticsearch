@@ -19,8 +19,7 @@
 
 package org.elasticsearch.painless.node;
 
-import org.elasticsearch.painless.Definition;
-import org.elasticsearch.painless.Definition.Type;
+import org.elasticsearch.painless.CompilerSettings;
 import org.elasticsearch.painless.Globals;
 import org.elasticsearch.painless.Locals;
 import org.elasticsearch.painless.Locals.Variable;
@@ -56,6 +55,13 @@ public final class SCatch extends AStatement {
     }
 
     @Override
+    void storeSettings(CompilerSettings settings) {
+        if (block != null) {
+            block.storeSettings(settings);
+        }
+    }
+
+    @Override
     void extractVariables(Set<String> variables) {
         variables.add(name);
 
@@ -66,11 +72,9 @@ public final class SCatch extends AStatement {
 
     @Override
     void analyze(Locals locals) {
-        Class<?> clazz;
+        Class<?> clazz = locals.getPainlessLookup().canonicalTypeNameToType(this.type);
 
-        try {
-            clazz = Definition.TypeToClass(locals.getDefinition().getType(this.type));
-        } catch (IllegalArgumentException exception) {
+        if (clazz == null) {
             throw createError(new IllegalArgumentException("Not a type [" + this.type + "]."));
         }
 
@@ -113,7 +117,7 @@ public final class SCatch extends AStatement {
 
         writer.visitTryCatchBlock(begin, end, jump, MethodWriter.getType(variable.clazz).getInternalName());
 
-        if (exception != null && !block.allEscape) {
+        if (exception != null && (block == null || !block.allEscape)) {
             writer.goTo(exception);
         }
     }

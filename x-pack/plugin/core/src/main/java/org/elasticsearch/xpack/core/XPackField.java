@@ -19,6 +19,8 @@ public final class XPackField {
     public static final String MACHINE_LEARNING = "ml";
     /** Name constant for the Logstash feature. */
     public static final String LOGSTASH = "logstash";
+    /** Name constant for the Beats feature. */
+    public static final String BEATS = "beats";
     /** Name constant for the Deprecation API feature. */
     public static final String DEPRECATION = "deprecation";
     /** Name constant for the upgrade feature. */
@@ -29,6 +31,24 @@ public final class XPackField {
     public static final String SQL = "sql";
     /** Name constant for the rollup feature. */
     public static final String ROLLUP = "rollup";
+    /** Name constant for the index lifecycle feature. */
+    public static final String INDEX_LIFECYCLE = "ilm";
+    /** Name constant for the CCR feature. */
+    public static final String CCR = "ccr";
+    /** Name constant for the data frame feature. */
+    public static final String DATA_FRAME = "data_frame";
+    /** Name constant for flattened fields. */
+    public static final String FLATTENED = "flattened";
+    /** Name constant for the vectors feature. */
+    public static final String VECTORS = "vectors";
+    /** Name constant for the voting-only-node feature. */
+    public static final String VOTING_ONLY = "voting_only";
+    /** Name constant for the frozen index feature. */
+    public static final String FROZEN_INDICES = "frozen_indices";
+    /** Name constant for spatial features. */
+    public static final String SPATIAL = "spatial";
+    /** Name constant for the data science plugin. */
+    public static final String DATA_SCIENCE = "data_science";
 
     private XPackField() {}
 

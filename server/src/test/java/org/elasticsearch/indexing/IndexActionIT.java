@@ -29,7 +29,6 @@ import org.elasticsearch.index.mapper.MapperParsingException;
 import org.elasticsearch.indices.InvalidIndexNameException;
 import org.elasticsearch.test.ESIntegTestCase;
 import org.elasticsearch.test.hamcrest.ElasticsearchAssertions;
-import org.elasticsearch.test.junit.annotations.TestLogging;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -40,7 +39,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 
-import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.lessThanOrEqualTo;
@@ -51,7 +49,6 @@ public class IndexActionIT extends ESIntegTestCase {
      * while the index is being created.
      */
 
-    @TestLogging("_root:DEBUG,org.elasticsearch.index.shard.IndexShard:TRACE,org.elasticsearch.action.search:TRACE")
     public void testAutoGenerateIdNoDuplicates() throws Exception {
         int numberOfIterations = scaledRandomIntBetween(10, 50);
         for (int i = 0; i < numberOfIterations; i++) {
@@ -70,9 +67,10 @@ public class IndexActionIT extends ESIntegTestCase {
                 try {
                     logger.debug("running search with all types");
                     SearchResponse response = client().prepareSearch("test").get();
-                    if (response.getHits().getTotalHits() != numOfDocs) {
-                        final String message = "Count is " + response.getHits().getTotalHits() + " but " + numOfDocs + " was expected. "
-                            + ElasticsearchAssertions.formatShardStatus(response);
+                    if (response.getHits().getTotalHits().value != numOfDocs) {
+                        final String message =
+                                "Count is " + response.getHits().getTotalHits().value + " but " + numOfDocs + " was expected. " +
+                                        ElasticsearchAssertions.formatShardStatus(response);
                         logger.error("{}. search response: \n{}", message, response);
                         fail(message);
                     }
@@ -84,10 +82,11 @@ public class IndexActionIT extends ESIntegTestCase {
                 }
                 try {
                     logger.debug("running search with a specific type");
-                    SearchResponse response = client().prepareSearch("test").setTypes("type").get();
-                    if (response.getHits().getTotalHits() != numOfDocs) {
-                        final String message = "Count is " + response.getHits().getTotalHits() + " but " + numOfDocs + " was expected. "
-                            + ElasticsearchAssertions.formatShardStatus(response);
+                    SearchResponse response = client().prepareSearch("test").get();
+                    if (response.getHits().getTotalHits().value != numOfDocs) {
+                        final String message =
+                                "Count is " + response.getHits().getTotalHits().value + " but " + numOfDocs + " was expected. " +
+                                        ElasticsearchAssertions.formatShardStatus(response);
                         logger.error("{}. search response: \n{}", message, response);
                         fail(message);
                     }
@@ -184,7 +183,8 @@ public class IndexActionIT extends ESIntegTestCase {
         createIndex("test");
         ensureGreen();
 
-        BulkResponse bulkResponse = client().prepareBulk().add(client().prepareIndex("test", "type", "1").setSource("field1", "value1_1")).execute().actionGet();
+        BulkResponse bulkResponse = client().prepareBulk().add(
+                client().prepareIndex("test", "type", "1").setSource("field1", "value1_1")).execute().actionGet();
         assertThat(bulkResponse.hasFailures(), equalTo(false));
         assertThat(bulkResponse.getItems().length, equalTo(1));
         IndexResponse indexResponse = bulkResponse.getItems()[0].getResponse();

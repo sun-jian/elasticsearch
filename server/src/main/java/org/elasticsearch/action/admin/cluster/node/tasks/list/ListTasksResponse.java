@@ -23,9 +23,11 @@ import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.action.TaskOperationFailure;
 import org.elasticsearch.action.support.tasks.BaseTasksResponse;
 import org.elasticsearch.cluster.node.DiscoveryNode;
+import org.elasticsearch.cluster.node.DiscoveryNodeRole;
 import org.elasticsearch.cluster.node.DiscoveryNodes;
 import org.elasticsearch.common.ParseField;
 import org.elasticsearch.common.Strings;
+import org.elasticsearch.common.TriFunction;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.xcontent.ConstructingObjectParser;
@@ -43,7 +45,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-import static org.elasticsearch.common.xcontent.ConstructingObjectParser.constructorArg;
 import static org.elasticsearch.common.xcontent.ConstructingObjectParser.optionalConstructorArg;
 
 /**
@@ -51,48 +52,21 @@ import static org.elasticsearch.common.xcontent.ConstructingObjectParser.optiona
  */
 public class ListTasksResponse extends BaseTasksResponse implements ToXContentObject {
     private static final String TASKS = "tasks";
-    private static final String TASK_FAILURES = "task_failures";
-    private static final String NODE_FAILURES = "node_failures";
 
-    private List<TaskInfo> tasks;
+    private final List<TaskInfo> tasks;
 
     private Map<String, List<TaskInfo>> perNodeTasks;
 
     private List<TaskGroup> groups;
 
-    public ListTasksResponse() {
-        this(null, null, null);
-    }
-
     public ListTasksResponse(List<TaskInfo> tasks, List<TaskOperationFailure> taskFailures,
             List<? extends ElasticsearchException> nodeFailures) {
         super(taskFailures, nodeFailures);
-        this.tasks = tasks == null ? Collections.emptyList() : Collections.unmodifiableList(new ArrayList<>(tasks));
+        this.tasks = tasks == null ? Collections.emptyList() : List.copyOf(tasks);
     }
 
-    private static final ConstructingObjectParser<ListTasksResponse, Void> PARSER =
-        new ConstructingObjectParser<>("list_tasks_response", true,
-            constructingObjects -> {
-                int i = 0;
-                @SuppressWarnings("unchecked")
-                List<TaskInfo> tasks = (List<TaskInfo>) constructingObjects[i++];
-                @SuppressWarnings("unchecked")
-                List<TaskOperationFailure> tasksFailures = (List<TaskOperationFailure>) constructingObjects[i++];
-                @SuppressWarnings("unchecked")
-                List<ElasticsearchException> nodeFailures = (List<ElasticsearchException>) constructingObjects[i];
-                return new ListTasksResponse(tasks, tasksFailures, nodeFailures);
-            });
-
-    static {
-        PARSER.declareObjectArray(constructorArg(), TaskInfo.PARSER, new ParseField(TASKS));
-        PARSER.declareObjectArray(optionalConstructorArg(), (p, c) -> TaskOperationFailure.fromXContent(p), new ParseField(TASK_FAILURES));
-        PARSER.declareObjectArray(optionalConstructorArg(),
-            (parser, c) -> ElasticsearchException.fromXContent(parser), new ParseField(NODE_FAILURES));
-    }
-
-    @Override
-    public void readFrom(StreamInput in) throws IOException {
-        super.readFrom(in);
+    public ListTasksResponse(StreamInput in) throws IOException {
+        super(in);
         tasks = Collections.unmodifiableList(in.readList(TaskInfo::new));
     }
 
@@ -101,6 +75,33 @@ public class ListTasksResponse extends BaseTasksResponse implements ToXContentOb
         super.writeTo(out);
         out.writeList(tasks);
     }
+
+    protected static <T> ConstructingObjectParser<T, Void> setupParser(String name,
+                                                                       TriFunction<
+                                                                           List<TaskInfo>,
+                                                                           List<TaskOperationFailure>,
+                                                                           List<ElasticsearchException>,
+                                                                           T> ctor) {
+        ConstructingObjectParser<T, Void> parser = new ConstructingObjectParser<>(name, true,
+            constructingObjects -> {
+                int i = 0;
+                @SuppressWarnings("unchecked")
+                List<TaskInfo> tasks = (List<TaskInfo>) constructingObjects[i++];
+                @SuppressWarnings("unchecked")
+                List<TaskOperationFailure> tasksFailures = (List<TaskOperationFailure>) constructingObjects[i++];
+                @SuppressWarnings("unchecked")
+                List<ElasticsearchException> nodeFailures = (List<ElasticsearchException>) constructingObjects[i];
+                return ctor.apply(tasks,tasksFailures, nodeFailures);
+            });
+        parser.declareObjectArray(optionalConstructorArg(), TaskInfo.PARSER, new ParseField(TASKS));
+        parser.declareObjectArray(optionalConstructorArg(), (p, c) -> TaskOperationFailure.fromXContent(p), new ParseField(TASK_FAILURES));
+        parser.declareObjectArray(optionalConstructorArg(),
+            (p, c) -> ElasticsearchException.fromXContent(p), new ParseField(NODE_FAILURES));
+        return parser;
+    }
+
+    private static final ConstructingObjectParser<ListTasksResponse, Void> PARSER =
+        setupParser("list_tasks_response", ListTasksResponse::new);
 
     /**
      * Returns the list of tasks by node
@@ -175,8 +176,8 @@ public class ListTasksResponse extends BaseTasksResponse implements ToXContentOb
                 builder.field("ip", node.getAddress());
 
                 builder.startArray("roles");
-                for (DiscoveryNode.Role role : node.getRoles()) {
-                    builder.value(role.getRoleName());
+                for (DiscoveryNodeRole role : node.getRoles()) {
+                    builder.value(role.roleName());
                 }
                 builder.endArray();
 
@@ -236,28 +237,6 @@ public class ListTasksResponse extends BaseTasksResponse implements ToXContentOb
         toXContentGroupedByNone(builder, params);
         builder.endObject();
         return builder;
-    }
-
-    private void toXContentCommon(XContentBuilder builder, Params params) throws IOException {
-        if (getTaskFailures() != null && getTaskFailures().size() > 0) {
-            builder.startArray(TASK_FAILURES);
-            for (TaskOperationFailure ex : getTaskFailures()){
-                builder.startObject();
-                builder.value(ex);
-                builder.endObject();
-            }
-            builder.endArray();
-        }
-
-        if (getNodeFailures() != null && getNodeFailures().size() > 0) {
-            builder.startArray(NODE_FAILURES);
-            for (ElasticsearchException ex : getNodeFailures()) {
-                builder.startObject();
-                ex.toXContent(builder, params);
-                builder.endObject();
-            }
-            builder.endArray();
-        }
     }
 
     public static ListTasksResponse fromXContent(XContentParser parser) {

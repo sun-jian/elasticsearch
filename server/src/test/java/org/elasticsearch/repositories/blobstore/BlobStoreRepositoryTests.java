@@ -19,35 +19,68 @@
 
 package org.elasticsearch.repositories.blobstore;
 
-import org.elasticsearch.action.admin.cluster.repositories.put.PutRepositoryResponse;
 import org.elasticsearch.action.admin.cluster.snapshots.create.CreateSnapshotResponse;
+import org.elasticsearch.action.support.master.AcknowledgedResponse;
 import org.elasticsearch.client.Client;
 import org.elasticsearch.common.UUIDs;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.unit.ByteSizeUnit;
+import org.elasticsearch.common.xcontent.NamedXContentRegistry;
+import org.elasticsearch.env.Environment;
+import org.elasticsearch.plugins.Plugin;
+import org.elasticsearch.plugins.RepositoryPlugin;
 import org.elasticsearch.repositories.IndexId;
 import org.elasticsearch.repositories.RepositoriesService;
+import org.elasticsearch.repositories.Repository;
 import org.elasticsearch.repositories.RepositoryData;
 import org.elasticsearch.repositories.RepositoryException;
+import org.elasticsearch.repositories.fs.FsRepository;
 import org.elasticsearch.snapshots.SnapshotId;
 import org.elasticsearch.snapshots.SnapshotState;
 import org.elasticsearch.test.ESIntegTestCase;
 import org.elasticsearch.test.ESSingleNodeTestCase;
+import org.elasticsearch.threadpool.ThreadPool;
 
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 import static org.elasticsearch.repositories.RepositoryDataTests.generateRandomRepoData;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.nullValue;
 
 /**
  * Tests for the {@link BlobStoreRepository} and its subclasses.
  */
 public class BlobStoreRepositoryTests extends ESSingleNodeTestCase {
+
+    static final String REPO_TYPE = "fsLike";
+
+    protected Collection<Class<? extends Plugin>> getPlugins() {
+        return Arrays.asList(FsLikeRepoPlugin.class);
+    }
+
+    // the reason for this plug-in is to drop any assertSnapshotOrGenericThread as mostly all access in this test goes from test threads
+    public static class FsLikeRepoPlugin extends Plugin implements RepositoryPlugin {
+
+        @Override
+        public Map<String, Repository.Factory> getRepositories(Environment env, NamedXContentRegistry namedXContentRegistry,
+                                                               ThreadPool threadPool) {
+            return Collections.singletonMap(REPO_TYPE,
+                (metadata) -> new FsRepository(metadata, env, namedXContentRegistry, threadPool) {
+                    @Override
+                    protected void assertSnapshotOrGenericThread() {
+                        // eliminate thread name check as we access blobStore on test/main threads
+                    }
+                });
+        }
+    }
 
     public void testRetrieveSnapshots() throws Exception {
         final Client client = client();
@@ -55,9 +88,9 @@ public class BlobStoreRepositoryTests extends ESSingleNodeTestCase {
         final String repositoryName = "test-repo";
 
         logger.info("-->  creating repository");
-        PutRepositoryResponse putRepositoryResponse =
+        AcknowledgedResponse putRepositoryResponse =
             client.admin().cluster().preparePutRepository(repositoryName)
-                                    .setType("fs")
+                                    .setType(REPO_TYPE)
                                     .setSettings(Settings.builder().put(node().settings()).put("location", location))
                                     .get();
         assertThat(putRepositoryResponse.isAcknowledged(), equalTo(true));
@@ -93,7 +126,7 @@ public class BlobStoreRepositoryTests extends ESSingleNodeTestCase {
 
         logger.info("--> make sure the node's repository can resolve the snapshots");
         final RepositoriesService repositoriesService = getInstanceFromNode(RepositoriesService.class);
-        @SuppressWarnings("unchecked") final BlobStoreRepository repository =
+        final BlobStoreRepository repository =
             (BlobStoreRepository) repositoriesService.repository(repositoryName);
         final List<SnapshotId> originalSnapshots = Arrays.asList(snapshotId1, snapshotId2);
 
@@ -156,50 +189,27 @@ public class BlobStoreRepositoryTests extends ESSingleNodeTestCase {
 
         // write to index generational file
         RepositoryData repositoryData = generateRandomRepoData();
-        repository.writeIndexGen(repositoryData, repositoryData.getGenId());
+        final long startingGeneration = repositoryData.getGenId();
+        repository.writeIndexGen(repositoryData, startingGeneration);
 
         // write repo data again to index generational file, errors because we already wrote to the
         // N+1 generation from which this repository data instance was created
-        expectThrows(RepositoryException.class, () -> repository.writeIndexGen(repositoryData, repositoryData.getGenId()));
+        expectThrows(RepositoryException.class, () -> repository.writeIndexGen(
+            repositoryData.withGenId(startingGeneration + 1), repositoryData.getGenId()));
     }
 
-    public void testReadAndWriteIncompatibleSnapshots() throws Exception {
-        final BlobStoreRepository repository = setupRepo();
+    public void testBadChunksize() throws Exception {
+        final Client client = client();
+        final Path location = ESIntegTestCase.randomRepoPath(node().settings());
+        final String repositoryName = "test-repo";
 
-        // write to and read from incompatible snapshots file with no entries
-        assertEquals(0, repository.getRepositoryData().getIncompatibleSnapshotIds().size());
-        RepositoryData emptyData = RepositoryData.EMPTY;
-        repository.writeIndexGen(emptyData, emptyData.getGenId());
-        repository.writeIncompatibleSnapshots(emptyData);
-        RepositoryData readData = repository.getRepositoryData();
-        assertEquals(emptyData, readData);
-        assertEquals(0, readData.getIndices().size());
-        assertEquals(0, readData.getSnapshotIds().size());
-
-        // write to and read from incompatible snapshots with some number of entries
-        final int numSnapshots = randomIntBetween(1, 20);
-        final List<SnapshotId> snapshotIds = new ArrayList<>(numSnapshots);
-        for (int i = 0; i < numSnapshots; i++) {
-            snapshotIds.add(new SnapshotId(randomAlphaOfLength(8), UUIDs.randomBase64UUID()));
-        }
-        RepositoryData repositoryData = new RepositoryData(readData.getGenId(),
-            Collections.emptyMap(), Collections.emptyMap(), Collections.emptyMap(), snapshotIds);
-        repository.blobContainer().deleteBlob("incompatible-snapshots");
-        repository.writeIncompatibleSnapshots(repositoryData);
-        readData = repository.getRepositoryData();
-        assertEquals(repositoryData.getIncompatibleSnapshotIds(), readData.getIncompatibleSnapshotIds());
-    }
-
-    public void testIncompatibleSnapshotsBlobExists() throws Exception {
-        final BlobStoreRepository repository = setupRepo();
-        RepositoryData emptyData = RepositoryData.EMPTY;
-        repository.writeIndexGen(emptyData, emptyData.getGenId());
-        RepositoryData repoData = repository.getRepositoryData();
-        assertEquals(emptyData, repoData);
-        assertTrue(repository.blobContainer().blobExists("incompatible-snapshots"));
-        repoData = addRandomSnapshotsToRepoData(repository.getRepositoryData(), true);
-        repository.writeIndexGen(repoData, repoData.getGenId());
-        assertEquals(0, repository.getRepositoryData().getIncompatibleSnapshotIds().size());
+        expectThrows(RepositoryException.class, () ->
+            client.admin().cluster().preparePutRepository(repositoryName)
+                .setType(REPO_TYPE)
+                .setSettings(Settings.builder().put(node().settings())
+                    .put("location", location)
+                    .put("chunk_size", randomLongBetween(-10, 0), ByteSizeUnit.BYTES))
+                .get());
     }
 
     private BlobStoreRepository setupRepo() {
@@ -207,16 +217,23 @@ public class BlobStoreRepositoryTests extends ESSingleNodeTestCase {
         final Path location = ESIntegTestCase.randomRepoPath(node().settings());
         final String repositoryName = "test-repo";
 
-        PutRepositoryResponse putRepositoryResponse =
+        Settings.Builder repoSettings = Settings.builder().put(node().settings()).put("location", location);
+        boolean compress = randomBoolean();
+        if (compress == false) {
+            repoSettings.put(BlobStoreRepository.COMPRESS_SETTING.getKey(), false);
+        }
+        AcknowledgedResponse putRepositoryResponse =
             client.admin().cluster().preparePutRepository(repositoryName)
-                                    .setType("fs")
-                                    .setSettings(Settings.builder().put(node().settings()).put("location", location))
+                                    .setType(REPO_TYPE)
+                                    .setSettings(repoSettings)
                                     .get();
         assertThat(putRepositoryResponse.isAcknowledged(), equalTo(true));
 
         final RepositoriesService repositoriesService = getInstanceFromNode(RepositoriesService.class);
-        @SuppressWarnings("unchecked") final BlobStoreRepository repository =
+        final BlobStoreRepository repository =
             (BlobStoreRepository) repositoriesService.repository(repositoryName);
+        assertThat("getBlobContainer has to be lazy initialized", repository.getBlobContainer(), nullValue());
+        assertEquals("Compress must be set to", compress, repository.isCompress());
         return repository;
     }
 

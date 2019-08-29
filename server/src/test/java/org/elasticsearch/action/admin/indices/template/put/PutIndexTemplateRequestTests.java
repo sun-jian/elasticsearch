@@ -18,26 +18,21 @@
  */
 package org.elasticsearch.action.admin.indices.template.put;
 
-import org.elasticsearch.Version;
 import org.elasticsearch.action.ActionRequestValidationException;
 import org.elasticsearch.action.admin.indices.alias.Alias;
-import org.elasticsearch.common.Strings;
-import org.elasticsearch.common.bytes.BytesArray;
-import org.elasticsearch.common.io.stream.BytesStreamOutput;
-import org.elasticsearch.common.io.stream.StreamInput;
+import org.elasticsearch.common.collect.MapBuilder;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentFactory;
-import org.elasticsearch.common.xcontent.XContentHelper;
 import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.common.xcontent.XContentType;
-import org.elasticsearch.common.xcontent.yaml.YamlXContent;
 import org.elasticsearch.test.AbstractXContentTestCase;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.Arrays;
-import java.util.Base64;
 import java.util.Collections;
+import java.util.Map;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
@@ -46,80 +41,6 @@ import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.core.Is.is;
 
 public class PutIndexTemplateRequestTests extends AbstractXContentTestCase<PutIndexTemplateRequest> {
-
-    // bwc for #21009
-    public void testPutIndexTemplateRequest510() throws IOException {
-        PutIndexTemplateRequest putRequest = new PutIndexTemplateRequest("test");
-        putRequest.patterns(Collections.singletonList("test*"));
-        putRequest.order(5);
-
-        PutIndexTemplateRequest multiPatternRequest = new PutIndexTemplateRequest("test");
-        multiPatternRequest.patterns(Arrays.asList("test*", "*test2", "*test3*"));
-        multiPatternRequest.order(5);
-
-        // These bytes were retrieved by Base64 encoding the result of the above with 5_0_0 code.
-        // Note: Instead of a list for the template, in 5_0_0 the element was provided as a string.
-        String putRequestBytes = "ADwDAAR0ZXN0BXRlc3QqAAAABQAAAAAAAA==";
-        BytesArray bytes = new BytesArray(Base64.getDecoder().decode(putRequestBytes));
-
-        try (StreamInput in = bytes.streamInput()) {
-            in.setVersion(Version.V_5_0_0);
-            PutIndexTemplateRequest readRequest = new PutIndexTemplateRequest();
-            readRequest.readFrom(in);
-            assertEquals(putRequest.patterns(), readRequest.patterns());
-            assertEquals(putRequest.order(), readRequest.order());
-
-            BytesStreamOutput output = new BytesStreamOutput();
-            output.setVersion(Version.V_5_0_0);
-            readRequest.writeTo(output);
-            assertEquals(bytes.toBytesRef(), output.bytes().toBytesRef());
-
-            // test that multi templates are reverse-compatible.
-            // for the bwc case, if multiple patterns, use only the first pattern seen.
-            output.reset();
-            multiPatternRequest.writeTo(output);
-            assertEquals(bytes.toBytesRef(), output.bytes().toBytesRef());
-        }
-    }
-
-    public void testPutIndexTemplateRequestSerializationXContent() throws IOException {
-        PutIndexTemplateRequest request = new PutIndexTemplateRequest("foo");
-        String mapping = Strings.toString(YamlXContent.contentBuilder().startObject().field("foo", "bar").endObject());
-        request.patterns(Collections.singletonList("foo"));
-        request.mapping("bar", mapping, XContentType.YAML);
-        assertNotEquals(mapping, request.mappings().get("bar"));
-        assertEquals(XContentHelper.convertToJson(new BytesArray(mapping), false, XContentType.YAML), request.mappings().get("bar"));
-
-        final Version version = randomFrom(Version.CURRENT, Version.V_5_3_0, Version.V_5_3_1, Version.V_5_3_2, Version.V_5_4_0);
-        try (BytesStreamOutput out = new BytesStreamOutput()) {
-            out.setVersion(version);
-            request.writeTo(out);
-
-            try (StreamInput in = StreamInput.wrap(out.bytes().toBytesRef().bytes)) {
-                in.setVersion(version);
-                PutIndexTemplateRequest serialized = new PutIndexTemplateRequest();
-                serialized.readFrom(in);
-                assertEquals(XContentHelper.convertToJson(new BytesArray(mapping), false, XContentType.YAML),
-                    serialized.mappings().get("bar"));
-            }
-        }
-    }
-
-    public void testPutIndexTemplateRequestSerializationXContentBwc() throws IOException {
-        final byte[] data = Base64.getDecoder().decode("ADwDAANmb28IdGVtcGxhdGUAAAAAAAABA2Jhcg8tLS0KZm9vOiAiYmFyIgoAAAAAAAAAAAAAAAA=");
-        final Version version = randomFrom(Version.V_5_0_0, Version.V_5_0_1, Version.V_5_0_2,
-            Version.V_5_1_1, Version.V_5_1_2, Version.V_5_2_0);
-        try (StreamInput in = StreamInput.wrap(data)) {
-            in.setVersion(version);
-            PutIndexTemplateRequest request = new PutIndexTemplateRequest();
-            request.readFrom(in);
-            String mapping = Strings.toString(YamlXContent.contentBuilder().startObject().field("foo", "bar").endObject());
-            assertNotEquals(mapping, request.mappings().get("bar"));
-            assertEquals(XContentHelper.convertToJson(new BytesArray(mapping), false, XContentType.YAML), request.mappings().get("bar"));
-            assertEquals("foo", request.name());
-            assertEquals("template", request.patterns().get(0));
-        }
-    }
 
     public void testValidateErrorMessage() throws Exception {
         PutIndexTemplateRequest request = new PutIndexTemplateRequest();
@@ -135,6 +56,67 @@ public class PutIndexTemplateRequestTests extends AbstractXContentTestCase<PutIn
         request.patterns(Collections.singletonList("test-*"));
         ActionRequestValidationException noError = request.validate();
         assertThat(noError, is(nullValue()));
+    }
+
+    public void testMappingKeyedByType() throws IOException {
+        PutIndexTemplateRequest request1 = new PutIndexTemplateRequest("foo");
+        PutIndexTemplateRequest request2 = new PutIndexTemplateRequest("bar");
+        {
+            XContentBuilder builder = XContentFactory.contentBuilder(randomFrom(XContentType.values()));
+            builder.startObject().startObject("properties")
+                .startObject("field1")
+                    .field("type", "text")
+                .endObject()
+                .startObject("field2")
+                    .startObject("properties")
+                        .startObject("field21")
+                            .field("type", "keyword")
+                        .endObject()
+                    .endObject()
+                .endObject()
+            .endObject().endObject();
+            request1.mapping("type1", builder);
+            builder = XContentFactory.contentBuilder(randomFrom(XContentType.values()));
+            builder.startObject().startObject("type1")
+                .startObject("properties")
+                    .startObject("field1")
+                        .field("type", "text")
+                    .endObject()
+                    .startObject("field2")
+                        .startObject("properties")
+                            .startObject("field21")
+                                .field("type", "keyword")
+                            .endObject()
+                        .endObject()
+                    .endObject()
+                .endObject()
+            .endObject().endObject();
+            request2.mapping("type1", builder);
+            assertEquals(request1.mappings(), request2.mappings());
+        }
+        {
+            request1 = new PutIndexTemplateRequest("foo");
+            request2 = new PutIndexTemplateRequest("bar");
+            String nakedMapping = "{\"properties\": {\"foo\": {\"type\": \"integer\"}}}";
+            request1.mapping("type2", nakedMapping, XContentType.JSON);
+            request2.mapping("type2", "{\"type2\": " + nakedMapping + "}", XContentType.JSON);
+            assertEquals(request1.mappings(), request2.mappings());
+        }
+        {
+            request1 = new PutIndexTemplateRequest("foo");
+            request2 = new PutIndexTemplateRequest("bar");
+            Map<String , Object> nakedMapping = MapBuilder.<String, Object>newMapBuilder()
+                    .put("properties", MapBuilder.<String, Object>newMapBuilder()
+                            .put("bar", MapBuilder.<String, Object>newMapBuilder()
+                                    .put("type", "scaled_float")
+                                    .put("scaling_factor", 100)
+                            .map())
+                    .map())
+            .map();
+            request1.mapping("type3", nakedMapping);
+            request2.mapping("type3", MapBuilder.<String, Object>newMapBuilder().put("type3", nakedMapping).map());
+            assertEquals(request1.mappings(), request2.mappings());
+        }
     }
 
     @Override

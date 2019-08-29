@@ -26,12 +26,10 @@ import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.index.fielddata.plain.SortedSetDVOrdinalsIndexFieldData;
-import org.elasticsearch.index.mapper.DocumentMapper;
 import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.join.mapper.ParentIdFieldMapper;
 import org.elasticsearch.join.mapper.ParentJoinFieldMapper;
 import org.elasticsearch.search.aggregations.AggregationBuilder;
-import org.elasticsearch.search.aggregations.AggregatorFactories;
 import org.elasticsearch.search.aggregations.AggregatorFactories.Builder;
 import org.elasticsearch.search.aggregations.AggregatorFactory;
 import org.elasticsearch.search.aggregations.support.FieldContext;
@@ -97,9 +95,9 @@ public class ChildrenAggregationBuilder
     }
 
     @Override
-    protected ValuesSourceAggregatorFactory<WithOrdinals, ?> innerBuild(SearchContext context,
+    protected ValuesSourceAggregatorFactory<WithOrdinals> innerBuild(SearchContext context,
                                                                         ValuesSourceConfig<WithOrdinals> config,
-                                                                        AggregatorFactory<?> parent,
+                                                                        AggregatorFactory parent,
                                                                         Builder subFactoriesBuilder) throws IOException {
         return new ChildrenAggregatorFactory(name, config, childFilter, parentFilter, context, parent,
                 subFactoriesBuilder, metaData);
@@ -161,12 +159,15 @@ public class ChildrenAggregationBuilder
     }
 
     @Override
-    protected int innerHashCode() {
-        return Objects.hash(childType);
+    public int hashCode() {
+        return Objects.hash(super.hashCode(), childType);
     }
 
     @Override
-    protected boolean innerEquals(Object obj) {
+    public boolean equals(Object obj) {
+        if (this == obj) return true;
+        if (obj == null || getClass() != obj.getClass()) return false;
+        if (super.equals(obj) == false) return false;
         ChildrenAggregationBuilder other = (ChildrenAggregationBuilder) obj;
         return Objects.equals(childType, other.childType);
     }

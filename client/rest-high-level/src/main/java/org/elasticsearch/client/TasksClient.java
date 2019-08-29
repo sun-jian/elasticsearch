@@ -20,10 +20,15 @@
 package org.elasticsearch.client;
 
 import org.elasticsearch.action.ActionListener;
+import org.elasticsearch.action.admin.cluster.node.tasks.cancel.CancelTasksRequest;
+import org.elasticsearch.action.admin.cluster.node.tasks.cancel.CancelTasksResponse;
 import org.elasticsearch.action.admin.cluster.node.tasks.list.ListTasksRequest;
 import org.elasticsearch.action.admin.cluster.node.tasks.list.ListTasksResponse;
+import org.elasticsearch.client.tasks.GetTaskRequest;
+import org.elasticsearch.client.tasks.GetTaskResponse;
 
 import java.io.IOException;
+import java.util.Optional;
 
 import static java.util.Collections.emptySet;
 
@@ -49,7 +54,7 @@ public final class TasksClient {
      * @throws IOException in case there is a problem sending the request or parsing back the response
      */
     public ListTasksResponse list(ListTasksRequest request, RequestOptions options) throws IOException {
-        return restHighLevelClient.performRequestAndParseEntity(request, RequestConverters::listTasks, options,
+        return restHighLevelClient.performRequestAndParseEntity(request, TasksRequestConverters::listTasks, options,
                 ListTasksResponse::fromXContent, emptySet());
     }
 
@@ -60,9 +65,83 @@ public final class TasksClient {
      * @param request the request
      * @param options the request options (e.g. headers), use {@link RequestOptions#DEFAULT} if nothing needs to be customized
      * @param listener the listener to be notified upon request completion
+     * @return cancellable that may be used to cancel the request
      */
-    public void listAsync(ListTasksRequest request, RequestOptions options, ActionListener<ListTasksResponse> listener) {
-        restHighLevelClient.performRequestAsyncAndParseEntity(request, RequestConverters::listTasks, options,
+    public Cancellable listAsync(ListTasksRequest request, RequestOptions options, ActionListener<ListTasksResponse> listener) {
+        return restHighLevelClient.performRequestAsyncAndParseEntity(request, TasksRequestConverters::listTasks, options,
                 ListTasksResponse::fromXContent, listener, emptySet());
+    }
+
+    /**
+     * Get a task using the Task Management API.
+     * See
+     * <a href="https://www.elastic.co/guide/en/elasticsearch/reference/current/tasks.html"> Task Management API on elastic.co</a>
+     * @param request the request
+     * @param options the request options (e.g. headers), use {@link RequestOptions#DEFAULT} if nothing needs to be customized
+     * @return the response
+     * @throws IOException in case there is a problem sending the request or parsing back the response
+     */
+    public Optional<GetTaskResponse> get(GetTaskRequest request, RequestOptions options) throws IOException {
+        return restHighLevelClient.performRequestAndParseOptionalEntity(request, TasksRequestConverters::getTask, options,
+                GetTaskResponse::fromXContent);
+    }
+
+    /**
+     * Get a task using the Task Management API.
+     * See
+     * <a href="https://www.elastic.co/guide/en/elasticsearch/reference/current/tasks.html"> Task Management API on elastic.co</a>
+     * @param request the request
+     * @param options the request options (e.g. headers), use {@link RequestOptions#DEFAULT} if nothing needs to be customized
+     * @param listener an actionlistener that takes an optional response (404s are returned as an empty Optional)
+     * @return cancellable that may be used to cancel the request
+     */
+    public Cancellable getAsync(GetTaskRequest request, RequestOptions options,
+                                ActionListener<Optional<GetTaskResponse>> listener) {
+
+        return restHighLevelClient.performRequestAsyncAndParseOptionalEntity(request, TasksRequestConverters::getTask, options,
+                GetTaskResponse::fromXContent, listener);
+    }
+
+    /**
+     * Cancel one or more cluster tasks using the Task Management API.
+     *
+     * See
+     * <a href="https://www.elastic.co/guide/en/elasticsearch/reference/current/tasks.html"> Task Management API on elastic.co</a>
+     * @param cancelTasksRequest the request
+     * @param options the request options (e.g. headers), use {@link RequestOptions#DEFAULT} if nothing needs to be customized
+     * @return the response
+     * @throws IOException in case there is a problem sending the request or parsing back the response
+     *
+     */
+    public CancelTasksResponse cancel(CancelTasksRequest cancelTasksRequest, RequestOptions options ) throws IOException {
+        return restHighLevelClient.performRequestAndParseEntity(
+            cancelTasksRequest,
+            TasksRequestConverters::cancelTasks,
+            options,
+            CancelTasksResponse::fromXContent,
+            emptySet()
+        );
+    }
+
+    /**
+     * Asynchronously cancel one or more cluster tasks using the Task Management API.
+     *
+     * See
+     * <a href="https://www.elastic.co/guide/en/elasticsearch/reference/current/tasks.html"> Task Management API on elastic.co</a>
+     * @param cancelTasksRequest the request
+     * @param options the request options (e.g. headers), use {@link RequestOptions#DEFAULT} if nothing needs to be customized
+     * @param listener the listener to be notified upon request completion
+     * @return cancellable that may be used to cancel the request
+     */
+    public Cancellable cancelAsync(CancelTasksRequest cancelTasksRequest, RequestOptions options,
+                                   ActionListener<CancelTasksResponse> listener) {
+        return restHighLevelClient.performRequestAsyncAndParseEntity(
+            cancelTasksRequest,
+            TasksRequestConverters::cancelTasks,
+            options,
+            CancelTasksResponse::fromXContent,
+            listener,
+            emptySet()
+        );
     }
 }

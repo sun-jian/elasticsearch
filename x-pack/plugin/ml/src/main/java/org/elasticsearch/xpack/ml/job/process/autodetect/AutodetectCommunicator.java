@@ -5,39 +5,40 @@
  */
 package org.elasticsearch.xpack.ml.job.process.autodetect;
 
+import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.common.CheckedSupplier;
 import org.elasticsearch.common.Nullable;
-import org.elasticsearch.common.logging.Loggers;
 import org.elasticsearch.common.util.concurrent.AbstractRunnable;
+import org.elasticsearch.common.util.concurrent.FutureUtils;
 import org.elasticsearch.common.xcontent.NamedXContentRegistry;
 import org.elasticsearch.common.xcontent.XContentType;
 import org.elasticsearch.env.Environment;
 import org.elasticsearch.index.analysis.AnalysisRegistry;
-import org.elasticsearch.xpack.ml.MachineLearning;
-import org.elasticsearch.xpack.core.ml.calendars.ScheduledEvent;
-import org.elasticsearch.xpack.ml.job.categorization.CategorizationAnalyzer;
 import org.elasticsearch.xpack.core.ml.job.config.AnalysisConfig;
 import org.elasticsearch.xpack.core.ml.job.config.CategorizationAnalyzerConfig;
 import org.elasticsearch.xpack.core.ml.job.config.DataDescription;
 import org.elasticsearch.xpack.core.ml.job.config.Job;
 import org.elasticsearch.xpack.core.ml.job.config.JobUpdate;
-import org.elasticsearch.xpack.ml.job.persistence.StateStreamer;
-import org.elasticsearch.xpack.ml.job.process.CountingInputStream;
-import org.elasticsearch.xpack.ml.job.process.DataCountsReporter;
-import org.elasticsearch.xpack.ml.job.process.autodetect.output.AutoDetectResultProcessor;
 import org.elasticsearch.xpack.core.ml.job.process.autodetect.output.FlushAcknowledgement;
-import org.elasticsearch.xpack.ml.job.process.autodetect.params.DataLoadParams;
-import org.elasticsearch.xpack.ml.job.process.autodetect.params.FlushJobParams;
-import org.elasticsearch.xpack.ml.job.process.autodetect.params.ForecastParams;
 import org.elasticsearch.xpack.core.ml.job.process.autodetect.state.DataCounts;
 import org.elasticsearch.xpack.core.ml.job.process.autodetect.state.ModelSizeStats;
 import org.elasticsearch.xpack.core.ml.job.process.autodetect.state.ModelSnapshot;
+import org.elasticsearch.xpack.core.ml.job.process.autodetect.state.TimingStats;
+import org.elasticsearch.xpack.core.ml.utils.ExceptionsHelper;
+import org.elasticsearch.xpack.ml.MachineLearning;
+import org.elasticsearch.xpack.ml.job.categorization.CategorizationAnalyzer;
+import org.elasticsearch.xpack.ml.job.persistence.StateStreamer;
+import org.elasticsearch.xpack.ml.job.process.CountingInputStream;
+import org.elasticsearch.xpack.ml.job.process.DataCountsReporter;
+import org.elasticsearch.xpack.ml.job.process.autodetect.output.AutodetectResultProcessor;
+import org.elasticsearch.xpack.ml.job.process.autodetect.params.DataLoadParams;
+import org.elasticsearch.xpack.ml.job.process.autodetect.params.FlushJobParams;
+import org.elasticsearch.xpack.ml.job.process.autodetect.params.ForecastParams;
 import org.elasticsearch.xpack.ml.job.process.autodetect.writer.DataToProcessWriter;
 import org.elasticsearch.xpack.ml.job.process.autodetect.writer.DataToProcessWriterFactory;
-import org.elasticsearch.xpack.core.ml.utils.ExceptionsHelper;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -45,7 +46,6 @@ import java.io.InputStream;
 import java.time.Duration;
 import java.time.ZonedDateTime;
 import java.util.Collections;
-import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
@@ -55,11 +55,10 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
-import java.util.function.Consumer;
 
 public class AutodetectCommunicator implements Closeable {
 
-    private static final Logger LOGGER = Loggers.getLogger(AutodetectCommunicator.class);
+    private static final Logger LOGGER = LogManager.getLogger(AutodetectCommunicator.class);
     private static final Duration FLUSH_PROCESS_CHECK_FREQUENCY = Duration.ofSeconds(1);
 
     private final Job job;
@@ -67,8 +66,8 @@ public class AutodetectCommunicator implements Closeable {
     private final AutodetectProcess autodetectProcess;
     private final StateStreamer stateStreamer;
     private final DataCountsReporter dataCountsReporter;
-    private final AutoDetectResultProcessor autoDetectResultProcessor;
-    private final Consumer<Exception> onFinishHandler;
+    private final AutodetectResultProcessor autodetectResultProcessor;
+    private final BiConsumer<Exception, Boolean> onFinishHandler;
     private final ExecutorService autodetectWorkerExecutor;
     private final NamedXContentRegistry xContentRegistry;
     private final boolean includeTokensField;
@@ -76,15 +75,15 @@ public class AutodetectCommunicator implements Closeable {
     private volatile boolean processKilled;
 
     AutodetectCommunicator(Job job, Environment environment, AutodetectProcess process, StateStreamer stateStreamer,
-                           DataCountsReporter dataCountsReporter, AutoDetectResultProcessor autoDetectResultProcessor,
-                           Consumer<Exception> onFinishHandler, NamedXContentRegistry xContentRegistry,
+                           DataCountsReporter dataCountsReporter, AutodetectResultProcessor autodetectResultProcessor,
+                           BiConsumer<Exception, Boolean> onFinishHandler, NamedXContentRegistry xContentRegistry,
                            ExecutorService autodetectWorkerExecutor) {
         this.job = job;
         this.environment = environment;
         this.autodetectProcess = process;
         this.stateStreamer = stateStreamer;
         this.dataCountsReporter = dataCountsReporter;
-        this.autoDetectResultProcessor = autoDetectResultProcessor;
+        this.autodetectResultProcessor = autodetectResultProcessor;
         this.onFinishHandler = onFinishHandler;
         this.xContentRegistry = xContentRegistry;
         this.autodetectWorkerExecutor = autodetectWorkerExecutor;
@@ -92,9 +91,8 @@ public class AutodetectCommunicator implements Closeable {
                 && job.getAnalysisConfig().getCategorizationFieldName() != null;
     }
 
-    public void init(ModelSnapshot modelSnapshot) throws IOException {
+    public void restoreState(ModelSnapshot modelSnapshot) {
         autodetectProcess.restoreState(stateStreamer, modelSnapshot);
-        createProcessWriter(Optional.empty()).writeHeader();
     }
 
     private DataToProcessWriter createProcessWriter(Optional<DataDescription> dataDescription) {
@@ -103,6 +101,17 @@ public class AutodetectCommunicator implements Closeable {
                 dataCountsReporter, xContentRegistry);
     }
 
+    /**
+     * This must be called once before {@link #writeToJob(InputStream, AnalysisRegistry, XContentType, DataLoadParams, BiConsumer)}
+     * can be used
+     */
+    public void writeHeader() throws IOException {
+        createProcessWriter(Optional.empty()).writeHeader();
+    }
+
+    /**
+     * Call {@link #writeHeader()} exactly once before using this method
+     */
     public void writeToJob(InputStream inputStream, AnalysisRegistry analysisRegistry, XContentType xContentType,
                            DataLoadParams params, BiConsumer<DataCounts, Exception> handler) {
         submitOperation(() -> {
@@ -111,7 +120,7 @@ public class AutodetectCommunicator implements Closeable {
             }
 
             CountingInputStream countingStream = new CountingInputStream(inputStream, dataCountsReporter);
-            DataToProcessWriter autoDetectWriter = createProcessWriter(params.getDataDescription());
+            DataToProcessWriter autodetectWriter = createProcessWriter(params.getDataDescription());
 
             if (includeTokensField && categorizationAnalyzer == null) {
                 createCategorizationAnalyzer(analysisRegistry);
@@ -120,14 +129,14 @@ public class AutodetectCommunicator implements Closeable {
             CountDownLatch latch = new CountDownLatch(1);
             AtomicReference<DataCounts> dataCountsAtomicReference = new AtomicReference<>();
             AtomicReference<Exception> exceptionAtomicReference = new AtomicReference<>();
-            autoDetectWriter.write(countingStream, categorizationAnalyzer, xContentType, (dataCounts, e) -> {
+            autodetectWriter.write(countingStream, categorizationAnalyzer, xContentType, (dataCounts, e) -> {
                 dataCountsAtomicReference.set(dataCounts);
                 exceptionAtomicReference.set(e);
                 latch.countDown();
             });
 
             latch.await();
-            autoDetectWriter.flushStream();
+            autodetectWriter.flushStream();
 
             if (exceptionAtomicReference.get() != null) {
                 throw exceptionAtomicReference.get();
@@ -159,9 +168,9 @@ public class AutodetectCommunicator implements Closeable {
                     killProcess(false, false);
                     stateStreamer.cancel();
                 }
-                autoDetectResultProcessor.awaitCompletion();
+                autodetectResultProcessor.awaitCompletion();
             } finally {
-                onFinishHandler.accept(restart ? new ElasticsearchException(reason) : null);
+                onFinishHandler.accept(restart ? new ElasticsearchException(reason) : null, true);
             }
             LOGGER.info("[{}] job closed", job.getId());
             return null;
@@ -176,7 +185,7 @@ public class AutodetectCommunicator implements Closeable {
                 // In this case the original exception is spurious and highly misleading
                 throw ExceptionsHelper.conflictStatusException("Close job interrupted by kill request");
             } else {
-                throw new ElasticsearchException(e);
+                throw FutureUtils.rethrowExecutionException(e);
             }
         } finally {
             destroyCategorizationAnalyzer();
@@ -184,51 +193,54 @@ public class AutodetectCommunicator implements Closeable {
     }
 
     public void killProcess(boolean awaitCompletion, boolean finish) throws IOException {
+        killProcess(awaitCompletion, finish, true);
+    }
+
+    public void killProcess(boolean awaitCompletion, boolean finish, boolean finalizeJob) throws IOException {
         try {
             processKilled = true;
-            autoDetectResultProcessor.setProcessKilled();
+            autodetectResultProcessor.setProcessKilled();
             autodetectWorkerExecutor.shutdown();
             autodetectProcess.kill();
 
             if (awaitCompletion) {
                 try {
-                    autoDetectResultProcessor.awaitCompletion();
+                    autodetectResultProcessor.awaitCompletion();
                 } catch (TimeoutException e) {
                     LOGGER.warn(new ParameterizedMessage("[{}] Timed out waiting for killed job", job.getId()), e);
                 }
             }
         } finally {
             if (finish) {
-                onFinishHandler.accept(null);
+                onFinishHandler.accept(null, finalizeJob);
             }
             destroyCategorizationAnalyzer();
         }
     }
 
-    public void writeUpdateProcessMessage(UpdateParams updateParams, List<ScheduledEvent> scheduledEvents,
-                                          BiConsumer<Void, Exception> handler) {
+    public void writeUpdateProcessMessage(UpdateProcessMessage update, BiConsumer<Void, Exception> handler) {
         submitOperation(() -> {
-            if (updateParams.getModelPlotConfig() != null) {
-                autodetectProcess.writeUpdateModelPlotMessage(updateParams.getModelPlotConfig());
+            if (update.getModelPlotConfig() != null) {
+                autodetectProcess.writeUpdateModelPlotMessage(update.getModelPlotConfig());
             }
 
             // Filters have to be written before detectors
-            if (updateParams.getFilter() != null) {
-                autodetectProcess.writeUpdateFiltersMessage(Collections.singletonList(updateParams.getFilter()));
+            if (update.getFilter() != null) {
+                autodetectProcess.writeUpdateFiltersMessage(Collections.singletonList(update.getFilter()));
             }
 
             // Add detector rules
-            if (updateParams.getDetectorUpdates() != null) {
-                for (JobUpdate.DetectorUpdate update : updateParams.getDetectorUpdates()) {
-                    if (update.getRules() != null) {
-                        autodetectProcess.writeUpdateDetectorRulesMessage(update.getDetectorIndex(), update.getRules());
+            if (update.getDetectorUpdates() != null) {
+                for (JobUpdate.DetectorUpdate detectorUpdate : update.getDetectorUpdates()) {
+                    if (detectorUpdate.getRules() != null) {
+                        autodetectProcess.writeUpdateDetectorRulesMessage(detectorUpdate.getDetectorIndex(), detectorUpdate.getRules());
                     }
                 }
             }
 
             // Add scheduled events; null means there's no update but an empty list means we should clear any events in the process
-            if (scheduledEvents != null) {
-                autodetectProcess.writeUpdateScheduledEventsMessage(scheduledEvents, job.getAnalysisConfig().getBucketSpan());
+            if (update.getScheduledEvents() != null) {
+                autodetectProcess.writeUpdateScheduledEventsMessage(update.getScheduledEvents(), job.getAnalysisConfig().getBucketSpan());
             }
 
             return null;
@@ -266,31 +278,31 @@ public class AutodetectCommunicator implements Closeable {
 
     public void persistJob(BiConsumer<Void, Exception> handler) {
         submitOperation(() -> {
-            autodetectProcess.persistJob();
+            autodetectProcess.persistState();
             return null;
         }, handler);
     }
 
     @Nullable
-    FlushAcknowledgement waitFlushToCompletion(String flushId) {
+    FlushAcknowledgement waitFlushToCompletion(String flushId) throws InterruptedException {
         LOGGER.debug("[{}] waiting for flush", job.getId());
 
         FlushAcknowledgement flushAcknowledgement;
         try {
-            flushAcknowledgement = autoDetectResultProcessor.waitForFlushAcknowledgement(flushId, FLUSH_PROCESS_CHECK_FREQUENCY);
+            flushAcknowledgement = autodetectResultProcessor.waitForFlushAcknowledgement(flushId, FLUSH_PROCESS_CHECK_FREQUENCY);
             while (flushAcknowledgement == null) {
                 checkProcessIsAlive();
                 checkResultsProcessorIsAlive();
-                flushAcknowledgement = autoDetectResultProcessor.waitForFlushAcknowledgement(flushId, FLUSH_PROCESS_CHECK_FREQUENCY);
+                flushAcknowledgement = autodetectResultProcessor.waitForFlushAcknowledgement(flushId, FLUSH_PROCESS_CHECK_FREQUENCY);
             }
         } finally {
-            autoDetectResultProcessor.clearAwaitingFlush(flushId);
+            autodetectResultProcessor.clearAwaitingFlush(flushId);
         }
 
         if (processKilled == false) {
             // We also have to wait for the normalizer to become idle so that we block
             // clients from querying results in the middle of normalization.
-            autoDetectResultProcessor.waitUntilRenormalizerIsIdle();
+            autodetectResultProcessor.waitUntilRenormalizerIsIdle();
 
             LOGGER.debug("[{}] Flush completed", job.getId());
         }
@@ -309,7 +321,7 @@ public class AutodetectCommunicator implements Closeable {
     }
 
     private void checkResultsProcessorIsAlive() {
-        if (autoDetectResultProcessor.isFailed()) {
+        if (autodetectResultProcessor.isFailed()) {
             // Don't log here - it just causes double logging when the exception gets logged
             throw new ElasticsearchException("[{}] Unexpected death of the result processor", job.getId());
         }
@@ -320,7 +332,11 @@ public class AutodetectCommunicator implements Closeable {
     }
 
     public ModelSizeStats getModelSizeStats() {
-        return autoDetectResultProcessor.modelSizeStats();
+        return autodetectResultProcessor.modelSizeStats();
+    }
+
+    public TimingStats getTimingStats() {
+        return autodetectResultProcessor.timingStats();
     }
 
     public DataCounts getDataCounts() {
@@ -373,6 +389,6 @@ public class AutodetectCommunicator implements Closeable {
             categorizationAnalyzerConfig =
                     CategorizationAnalyzerConfig.buildDefaultCategorizationAnalyzer(analysisConfig.getCategorizationFilters());
         }
-        categorizationAnalyzer = new CategorizationAnalyzer(analysisRegistry, environment, categorizationAnalyzerConfig);
+        categorizationAnalyzer = new CategorizationAnalyzer(analysisRegistry, categorizationAnalyzerConfig);
     }
 }

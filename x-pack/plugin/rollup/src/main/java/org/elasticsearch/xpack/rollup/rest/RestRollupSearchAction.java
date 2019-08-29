@@ -7,7 +7,6 @@ package org.elasticsearch.xpack.rollup.rest;
 
 import org.elasticsearch.action.search.SearchRequest;
 import org.elasticsearch.client.node.NodeClient;
-import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.rest.BaseRestHandler;
 import org.elasticsearch.rest.RestController;
 import org.elasticsearch.rest.RestRequest;
@@ -16,11 +15,13 @@ import org.elasticsearch.rest.action.search.RestSearchAction;
 import org.elasticsearch.xpack.core.rollup.action.RollupSearchAction;
 
 import java.io.IOException;
+import java.util.Set;
 
 public class RestRollupSearchAction extends BaseRestHandler {
 
-    public RestRollupSearchAction(Settings settings, RestController controller) {
-        super(settings);
+    private static final Set<String> RESPONSE_PARAMS = Set.of(RestSearchAction.TYPED_KEYS_PARAM, RestSearchAction.TOTAL_HITS_AS_INT_PARAM);
+
+    public RestRollupSearchAction(RestController controller) {
         controller.registerHandler(RestRequest.Method.GET, "_rollup_search", this);
         controller.registerHandler(RestRequest.Method.POST, "_rollup_search", this);
         controller.registerHandler(RestRequest.Method.GET, "{index}/_rollup_search", this);
@@ -32,11 +33,17 @@ public class RestRollupSearchAction extends BaseRestHandler {
         SearchRequest searchRequest = new SearchRequest();
         restRequest.withContentOrSourceParamParserOrNull(parser ->
                 RestSearchAction.parseSearchRequest(searchRequest, restRequest, parser, size -> searchRequest.source().size(size)));
+        RestSearchAction.checkRestTotalHits(restRequest, searchRequest);
         return channel -> client.execute(RollupSearchAction.INSTANCE, searchRequest, new RestToXContentListener<>(channel));
     }
 
     @Override
     public String getName() {
         return "rollup_search_action";
+    }
+
+    @Override
+    protected Set<String> responseParams() {
+        return RESPONSE_PARAMS;
     }
 }

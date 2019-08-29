@@ -21,49 +21,97 @@ package org.elasticsearch.repositories.gcs;
 
 import com.google.api.client.googleapis.GoogleUtils;
 import com.google.api.client.http.HttpTransport;
-import com.google.api.client.http.javanet.DefaultConnectionFactory;
 import com.google.api.client.http.javanet.NetHttpTransport;
 import com.google.auth.oauth2.ServiceAccountCredentials;
 import com.google.cloud.http.HttpTransportOptions;
 import com.google.cloud.storage.Storage;
 import com.google.cloud.storage.StorageOptions;
-
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.collect.MapBuilder;
-import org.elasticsearch.common.component.AbstractComponent;
 import org.elasticsearch.common.unit.TimeValue;
-import org.elasticsearch.env.Environment;
+import org.elasticsearch.common.util.LazyInitializable;
 
 import java.io.IOException;
-import java.net.HttpURLConnection;
 import java.net.URI;
-import java.net.URISyntaxException;
-import java.net.URL;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 
-public class GoogleCloudStorageService extends AbstractComponent {
+import static java.util.Collections.emptyMap;
 
-    /** Clients settings identified by client name. */
-    private final Map<String, GoogleCloudStorageClientSettings> clientsSettings;
+public class GoogleCloudStorageService {
+    
+    private static final Logger logger = LogManager.getLogger(GoogleCloudStorageService.class);
 
-    public GoogleCloudStorageService(final Environment environment, final Map<String, GoogleCloudStorageClientSettings> clientsSettings) {
-        super(environment.settings());
-        this.clientsSettings = clientsSettings;
+    /**
+     * Dictionary of client instances. Client instances are built lazily from the
+     * latest settings.
+     */
+    private final AtomicReference<Map<String, LazyInitializable<Storage, IOException>>> clientsCache = new AtomicReference<>(emptyMap());
+
+    /**
+     * Refreshes the client settings and clears the client cache. Subsequent calls to
+     * {@code GoogleCloudStorageService#client} will return new clients constructed
+     * using the parameter settings.
+     *
+     * @param clientsSettings the new settings used for building clients for subsequent requests
+     */
+    public synchronized void refreshAndClearCache(Map<String, GoogleCloudStorageClientSettings> clientsSettings) {
+        // build the new lazy clients
+        final Map<String, LazyInitializable<Storage, IOException>> newClientsCache =
+        clientsSettings.entrySet()
+                .stream()
+                .collect(Collectors.toUnmodifiableMap(
+                        Map.Entry::getKey,
+                        entry -> new LazyInitializable<>(() -> createClient(entry.getKey(), entry.getValue()))));
+
+        // make the new clients available
+        final Map<String, LazyInitializable<Storage, IOException>> oldClientCache = clientsCache.getAndSet(newClientsCache);
+        // release old clients
+        oldClientCache.values().forEach(LazyInitializable::reset);
     }
 
     /**
-     * Creates a client that can be used to manage Google Cloud Storage objects.
+     * Attempts to retrieve a client from the cache. If the client does not exist it
+     * will be created from the latest settings and will populate the cache. The
+     * returned instance should not be cached by the calling code. Instead, for each
+     * use, the (possibly updated) instance should be requested by calling this
+     * method.
+     *
+     * @param clientName name of the client settings used to create the client
+     * @return a cached client storage instance that can be used to manage objects
+     *         (blobs)
+     */
+    public Storage client(final String clientName) throws IOException {
+        final LazyInitializable<Storage, IOException> lazyClient = clientsCache.get().get(clientName);
+        if (lazyClient == null) {
+            throw new IllegalArgumentException("Unknown client name [" + clientName + "]. Existing client configs: "
+                    + Strings.collectionToDelimitedString(clientsCache.get().keySet(), ","));
+        }
+        return lazyClient.getOrCompute();
+    }
+
+    /**
+     * Creates a client that can be used to manage Google Cloud Storage objects. The client is thread-safe.
      *
      * @param clientName name of client settings to use, including secure settings
-     * @return a Client instance that can be used to manage Storage objects
+     * @param clientSettings name of client settings to use, including secure settings
+     * @return a new client storage instance that can be used to manage objects
+     *         (blobs)
      */
-    public Storage createClient(final String clientName) throws Exception {
-        final GoogleCloudStorageClientSettings clientSettings = clientsSettings.get(clientName);
-        if (clientSettings == null) {
-            throw new IllegalArgumentException("Unknown client name [" + clientName + "]. Existing client configs: "
-                    + Strings.collectionToDelimitedString(clientsSettings.keySet(), ","));
-        }
-        final HttpTransport httpTransport = createHttpTransport(clientSettings.getHost());
+    private static Storage createClient(String clientName, GoogleCloudStorageClientSettings clientSettings) throws IOException {
+        logger.debug(() -> new ParameterizedMessage("creating GCS client with client_name [{}], endpoint [{}]", clientName,
+                clientSettings.getHost()));
+        final HttpTransport httpTransport = SocketAccess.doPrivilegedIOException(() -> {
+            final NetHttpTransport.Builder builder = new NetHttpTransport.Builder();
+            // requires java.lang.RuntimePermission "setFactory"
+            // Pin the TLS trust certificates.
+            builder.trustCertificates(GoogleUtils.getCertificateTrustStore());
+            return builder.build();
+        });
         final HttpTransportOptions httpTransportOptions = HttpTransportOptions.newBuilder()
                 .setConnectTimeout(toTimeout(clientSettings.getConnectTimeout()))
                 .setReadTimeout(toTimeout(clientSettings.getReadTimeout()))
@@ -99,51 +147,6 @@ public class GoogleCloudStorageService extends AbstractComponent {
             storageOptionsBuilder.setCredentials(serviceAccountCredentials);
         }
         return storageOptionsBuilder.build().getService();
-    }
-
-    /**
-     * Pins the TLS trust certificates and, more importantly, overrides connection
-     * URLs in the case of a custom endpoint setting because some connections don't
-     * fully honor this setting (bugs in the SDK). The default connection factory
-     * opens a new connection for each request. This is required for the storage
-     * instance to be thread-safe.
-     **/
-    private static HttpTransport createHttpTransport(final String endpoint) throws Exception {
-        final NetHttpTransport.Builder builder = new NetHttpTransport.Builder();
-        // requires java.lang.RuntimePermission "setFactory"
-        builder.trustCertificates(GoogleUtils.getCertificateTrustStore());
-        if (Strings.hasLength(endpoint)) {
-            final URL endpointUrl = URI.create(endpoint).toURL();
-            builder.setConnectionFactory(new DefaultConnectionFactory() {
-                @Override
-                public HttpURLConnection openConnection(final URL originalUrl) throws IOException {
-                    // test if the URL is built correctly, ie following the `host` setting
-                    if (originalUrl.getHost().equals(endpointUrl.getHost()) && originalUrl.getPort() == endpointUrl.getPort()
-                            && originalUrl.getProtocol().equals(endpointUrl.getProtocol())) {
-                        return super.openConnection(originalUrl);
-                    }
-                    // override connection URLs because some don't follow the config. See
-                    // https://github.com/GoogleCloudPlatform/google-cloud-java/issues/3254 and
-                    // https://github.com/GoogleCloudPlatform/google-cloud-java/issues/3255
-                    URI originalUri;
-                    try {
-                        originalUri = originalUrl.toURI();
-                    } catch (final URISyntaxException e) {
-                        throw new RuntimeException(e);
-                    }
-                    String overridePath = "/";
-                    if (originalUri.getRawPath() != null) {
-                        overridePath = originalUri.getRawPath();
-                    }
-                    if (originalUri.getRawQuery() != null) {
-                        overridePath += "?" + originalUri.getRawQuery();
-                    }
-                    return super.openConnection(
-                            new URL(endpointUrl.getProtocol(), endpointUrl.getHost(), endpointUrl.getPort(), overridePath));
-                }
-            });
-        }
-        return builder.build();
     }
 
     /**

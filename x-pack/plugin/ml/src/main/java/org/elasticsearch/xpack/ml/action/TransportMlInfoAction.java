@@ -8,41 +8,49 @@ package org.elasticsearch.xpack.ml.action;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.HandledTransportAction;
-import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.inject.Inject;
-import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.ByteSizeUnit;
 import org.elasticsearch.common.unit.ByteSizeValue;
-import org.elasticsearch.threadpool.ThreadPool;
+import org.elasticsearch.tasks.Task;
 import org.elasticsearch.transport.TransportService;
 import org.elasticsearch.xpack.core.ml.MachineLearningField;
+import org.elasticsearch.xpack.core.ml.MlMetadata;
 import org.elasticsearch.xpack.core.ml.action.MlInfoAction;
 import org.elasticsearch.xpack.core.ml.datafeed.DatafeedConfig;
 import org.elasticsearch.xpack.core.ml.job.config.AnalysisLimits;
 import org.elasticsearch.xpack.core.ml.job.config.Job;
+import org.elasticsearch.xpack.ml.process.MlControllerHolder;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.TimeoutException;
 
 public class TransportMlInfoAction extends HandledTransportAction<MlInfoAction.Request, MlInfoAction.Response> {
 
     private final ClusterService clusterService;
+    private final Map<String, Object> nativeCodeInfo;
 
     @Inject
-    public TransportMlInfoAction(Settings settings, ThreadPool threadPool, TransportService transportService,
-                                 ActionFilters actionFilters, IndexNameExpressionResolver indexNameExpressionResolver,
-                                 ClusterService clusterService) {
-        super(settings, MlInfoAction.NAME, threadPool, transportService, actionFilters, indexNameExpressionResolver,
-                MlInfoAction.Request::new);
+    public TransportMlInfoAction(TransportService transportService, ActionFilters actionFilters,
+                                 ClusterService clusterService, MlControllerHolder mlControllerHolder) {
+        super(MlInfoAction.NAME, transportService, actionFilters, MlInfoAction.Request::new);
         this.clusterService = clusterService;
+
+        try {
+            nativeCodeInfo = mlControllerHolder.getMlController().getNativeCodeInfo();
+        } catch (TimeoutException e) {
+            throw new RuntimeException("Could not get native code info from native controller", e);
+        }
     }
 
     @Override
-    protected void doExecute(MlInfoAction.Request request, ActionListener<MlInfoAction.Response> listener) {
+    protected void doExecute(Task task, MlInfoAction.Request request, ActionListener<MlInfoAction.Response> listener) {
         Map<String, Object> info = new HashMap<>();
         info.put("defaults", defaults());
         info.put("limits", limits());
+        info.put("native_code", nativeCodeInfo);
+        info.put(MlMetadata.UPGRADE_MODE.getPreferredName(), upgradeMode());
         listener.onResponse(new MlInfoAction.Response(info));
     }
 
@@ -51,6 +59,10 @@ public class TransportMlInfoAction extends HandledTransportAction<MlInfoAction.R
         defaults.put("anomaly_detectors", anomalyDetectorsDefaults());
         defaults.put("datafeeds", datafeedsDefaults());
         return defaults;
+    }
+
+    private boolean upgradeMode() {
+        return MlMetadata.getMlMetadata(clusterService.state()).isUpgradeMode();
     }
 
     private Map<String, Object> anomalyDetectorsDefaults() {

@@ -18,10 +18,10 @@
  */
 package org.elasticsearch.action.search;
 
+import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.elasticsearch.action.OriginalIndices;
 import org.elasticsearch.common.Nullable;
-import org.elasticsearch.common.logging.Loggers;
 import org.elasticsearch.search.SearchShardTarget;
 import org.elasticsearch.search.internal.InternalSearchResponse;
 import org.elasticsearch.search.internal.ShardSearchTransportRequest;
@@ -40,7 +40,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * SearchPhaseContext for tests
  */
 public final class MockSearchPhaseContext implements SearchPhaseContext {
-    private static final Logger logger = Loggers.getLogger(MockSearchPhaseContext.class);
+    private static final Logger logger = LogManager.getLogger(MockSearchPhaseContext.class);
     public AtomicReference<Throwable> phaseFailure = new AtomicReference<>();
     final int numShards;
     final AtomicInteger numSuccess;
@@ -49,6 +49,7 @@ public final class MockSearchPhaseContext implements SearchPhaseContext {
     Set<Long> releasedSearchContexts = new HashSet<>();
     SearchRequest searchRequest = new SearchRequest();
     AtomicInteger phasesExecuted = new AtomicInteger();
+    AtomicReference<SearchResponse> searchResponse = new AtomicReference<>();
 
     public MockSearchPhaseContext(int numShards) {
         this.numShards = numShards;
@@ -82,9 +83,9 @@ public final class MockSearchPhaseContext implements SearchPhaseContext {
     }
 
     @Override
-    public SearchResponse buildSearchResponse(InternalSearchResponse internalSearchResponse, String scrollId) {
-        return new SearchResponse(internalSearchResponse, scrollId, numShards, numSuccess.get(), 0, 0,
-            failures.toArray(new ShardSearchFailure[failures.size()]), SearchResponse.Clusters.EMPTY);
+    public void sendSearchResponse(InternalSearchResponse internalSearchResponse, String scrollId) {
+        searchResponse.set(new SearchResponse(internalSearchResponse, scrollId, numShards, numSuccess.get(), 0, 0,
+            failures.toArray(ShardSearchFailure.EMPTY_ARRAY), SearchResponse.Clusters.EMPTY));
     }
 
     @Override
@@ -128,11 +129,6 @@ public final class MockSearchPhaseContext implements SearchPhaseContext {
     @Override
     public void execute(Runnable command) {
         command.run();
-    }
-
-    @Override
-    public void onResponse(SearchResponse response) {
-        Assert.fail("should not be called");
     }
 
     @Override

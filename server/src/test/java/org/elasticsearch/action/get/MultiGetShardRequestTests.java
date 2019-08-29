@@ -45,7 +45,8 @@ public class MultiGetShardRequestTests extends ESTestCase {
         MultiGetShardRequest multiGetShardRequest = new MultiGetShardRequest(multiGetRequest, "index", 0);
         int numItems = iterations(10, 30);
         for (int i = 0; i < numItems; i++) {
-            MultiGetRequest.Item item = new MultiGetRequest.Item("alias-" + randomAlphaOfLength(randomIntBetween(1, 10)), "type", "id-" + i);
+            MultiGetRequest.Item item = new MultiGetRequest.Item("alias-" + randomAlphaOfLength(randomIntBetween(1, 10)),
+                "type", "id-" + i);
             if (randomBoolean()) {
                 int numFields = randomIntBetween(1, 5);
                 String[] fields = new String[numFields];
@@ -70,9 +71,7 @@ public class MultiGetShardRequestTests extends ESTestCase {
 
         StreamInput in = out.bytes().streamInput();
         in.setVersion(out.getVersion());
-        MultiGetShardRequest multiGetShardRequest2 = new MultiGetShardRequest();
-        multiGetShardRequest2.readFrom(in);
-
+        MultiGetShardRequest multiGetShardRequest2 = new MultiGetShardRequest(in);
         assertThat(multiGetShardRequest2.index(), equalTo(multiGetShardRequest.index()));
         assertThat(multiGetShardRequest2.preference(), equalTo(multiGetShardRequest.preference()));
         assertThat(multiGetShardRequest2.realtime(), equalTo(multiGetShardRequest.realtime()));

@@ -21,6 +21,7 @@ package org.elasticsearch.snapshots.mockstore;
 import org.elasticsearch.common.blobstore.BlobContainer;
 import org.elasticsearch.common.blobstore.BlobMetaData;
 import org.elasticsearch.common.blobstore.BlobPath;
+import org.elasticsearch.common.blobstore.DeleteResult;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -39,28 +40,29 @@ public class BlobContainerWrapper implements BlobContainer {
     }
 
     @Override
-    public boolean blobExists(String blobName) {
-        return delegate.blobExists(blobName);
-    }
-
-    @Override
     public InputStream readBlob(String name) throws IOException {
         return delegate.readBlob(name);
     }
 
     @Override
-    public void writeBlob(String blobName, InputStream inputStream, long blobSize) throws IOException {
-        delegate.writeBlob(blobName, inputStream, blobSize);
+    public void writeBlob(String blobName, InputStream inputStream, long blobSize, boolean failIfAlreadyExists) throws IOException {
+        delegate.writeBlob(blobName, inputStream, blobSize, failIfAlreadyExists);
     }
 
     @Override
-    public void writeBlobAtomic(final String blobName, final InputStream inputStream, final long blobSize) throws IOException {
-        delegate.writeBlobAtomic(blobName, inputStream, blobSize);
+    public void writeBlobAtomic(final String blobName, final InputStream inputStream, final long blobSize,
+                                boolean failIfAlreadyExists) throws IOException {
+        delegate.writeBlobAtomic(blobName, inputStream, blobSize, failIfAlreadyExists);
     }
 
     @Override
     public void deleteBlob(String blobName) throws IOException {
         delegate.deleteBlob(blobName);
+    }
+
+    @Override
+    public DeleteResult delete() throws IOException {
+        return delegate.delete();
     }
 
     @Override
@@ -74,12 +76,12 @@ public class BlobContainerWrapper implements BlobContainer {
     }
 
     @Override
-    public Map<String, BlobMetaData> listBlobsByPrefix(String blobNamePrefix) throws IOException {
-        return delegate.listBlobsByPrefix(blobNamePrefix);
+    public Map<String, BlobContainer> children() throws IOException {
+        return delegate.children();
     }
 
     @Override
-    public void move(String sourceBlobName, String targetBlobName) throws IOException {
-        delegate.move(sourceBlobName, targetBlobName);
+    public Map<String, BlobMetaData> listBlobsByPrefix(String blobNamePrefix) throws IOException {
+        return delegate.listBlobsByPrefix(blobNamePrefix);
     }
 }

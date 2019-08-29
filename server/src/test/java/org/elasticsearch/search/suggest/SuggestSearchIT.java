@@ -83,7 +83,7 @@ public class SuggestSearchIT extends ESIntegTestCase {
 
     // see #3196
     public void testSuggestAcrossMultipleIndices() throws IOException {
-        createIndex("test");
+        assertAcked(prepareCreate("test").addMapping("type1", "text", "type=text"));
         ensureGreen();
 
         index("test", "type1", "1", "text", "abcd");
@@ -97,7 +97,7 @@ public class SuggestSearchIT extends ESIntegTestCase {
                 .text("abcd");
         logger.info("--> run suggestions with one index");
         searchSuggest("test", termSuggest);
-        createIndex("test_1");
+        assertAcked(prepareCreate("test_1").addMapping("type1", "text", "type=text"));
         ensureGreen();
 
         index("test_1", "type1", "1", "text", "ab cd");
@@ -302,7 +302,7 @@ public class SuggestSearchIT extends ESIntegTestCase {
     }
 
     public void testSimple() throws Exception {
-        createIndex("test");
+        assertAcked(prepareCreate("test").addMapping("type1", "text", "type=text"));
         ensureGreen();
 
         index("test", "type1", "1", "text", "abcd");
@@ -327,7 +327,7 @@ public class SuggestSearchIT extends ESIntegTestCase {
     }
 
     public void testEmpty() throws Exception {
-        createIndex("test");
+        assertAcked(prepareCreate("test").addMapping("type1", "text", "type=text"));
         ensureGreen();
 
         index("test", "type1", "1", "text", "bar");
@@ -345,8 +345,36 @@ public class SuggestSearchIT extends ESIntegTestCase {
         assertThat(suggest.getSuggestion("test").getEntries().get(0).getText().string(), equalTo("abcd"));
     }
 
+    public void testEmptyIndex() throws Exception {
+        assertAcked(prepareCreate("test").addMapping("type1", "text", "type=text"));
+        ensureGreen();
+
+        // use SuggestMode.ALWAYS, otherwise the results can vary between requests.
+        TermSuggestionBuilder termSuggest = termSuggestion("text")
+                .suggestMode(SuggestMode.ALWAYS)
+                .text("abcd");
+        Suggest suggest = searchSuggest("test", termSuggest);
+        assertSuggestionSize(suggest, 0, 0, "test");
+        assertThat(suggest.getSuggestion("test").getEntries().get(0).getText().string(), equalTo("abcd"));
+
+        suggest = searchSuggest("test", termSuggest);
+        assertSuggestionSize(suggest, 0, 0, "test");
+        assertThat(suggest.getSuggestion("test").getEntries().get(0).getText().string(), equalTo("abcd"));
+
+        index("test", "type1", "1", "text", "bar");
+        refresh();
+
+        suggest = searchSuggest("test", termSuggest);
+        assertSuggestionSize(suggest, 0, 0, "test");
+        assertThat(suggest.getSuggestion("test").getEntries().get(0).getText().string(), equalTo("abcd"));
+
+        suggest = searchSuggest("test", termSuggest);
+        assertSuggestionSize(suggest, 0, 0, "test");
+        assertThat(suggest.getSuggestion("test").getEntries().get(0).getText().string(), equalTo("abcd"));
+    }
+
     public void testWithMultipleCommands() throws Exception {
-        createIndex("test");
+        assertAcked(prepareCreate("test").addMapping("typ1", "field1", "type=text", "field2", "type=text"));
         ensureGreen();
 
         index("test", "typ1", "1", "field1", "prefix_abcd", "field2", "prefix_efgh");
@@ -687,7 +715,7 @@ public class SuggestSearchIT extends ESIntegTestCase {
                 .put(indexSettings())
                 .put(IndexSettings.MAX_SHINGLE_DIFF_SETTING.getKey(), 4)
                 .put("index.analysis.analyzer.suggest.tokenizer", "standard")
-                .putList("index.analysis.analyzer.suggest.filter", "standard", "lowercase", "shingler")
+                .putList("index.analysis.analyzer.suggest.filter", "lowercase", "shingler")
                 .put("index.analysis.filter.shingler.type", "shingle")
                 .put("index.analysis.filter.shingler.min_shingle_size", 2)
                 .put("index.analysis.filter.shingler.max_shingle_size", 5)
@@ -747,20 +775,16 @@ public class SuggestSearchIT extends ESIntegTestCase {
         assertAcked(prepareCreate("test").setSettings(Settings.builder()
                 .put(indexSettings())
                 .put(IndexSettings.MAX_SHINGLE_DIFF_SETTING.getKey(), 4)
+                .put("index.refresh_interval", -1)  // prevents occasional scoring glitches due to multi segments
                 .put("index.analysis.analyzer.suggest.tokenizer", "standard")
-                .putList("index.analysis.analyzer.suggest.filter", "standard", "lowercase", "shingler")
+                .putList("index.analysis.analyzer.suggest.filter", "lowercase", "shingler")
                 .put("index.analysis.filter.shingler.type", "shingle")
                 .put("index.analysis.filter.shingler.min_shingle_size", 2)
                 .put("index.analysis.filter.shingler.max_shingle_size", 5)
                 .put("index.analysis.filter.shingler.output_unigrams", true)).addMapping("type1", mappingBuilder));
         ensureGreen();
 
-        index("test", "type1", "11", "foo", "bar");
-        index("test", "type1", "12", "foo", "bar");
-        index("test", "type1", "1", "name", "Just testing the suggestions api");
-        index("test", "type1", "2", "name", "An other title about equal length");
-        refresh();
-
+        // test phrase suggestion on completely empty index
         SearchResponse searchResponse = client().prepareSearch()
                 .setSize(0)
                 .suggest(
@@ -769,7 +793,44 @@ public class SuggestSearchIT extends ESIntegTestCase {
                 .get();
 
         assertNoFailures(searchResponse);
-        assertSuggestion(searchResponse.getSuggest(), 0, 0, "did_you_mean", "testing suggestions");
+        Suggest suggest = searchResponse.getSuggest();
+        assertSuggestionSize(suggest, 0, 0, "did_you_mean");
+        assertThat(suggest.getSuggestion("did_you_mean").getEntries().get(0).getText().string(), equalTo("tetsting sugestion"));
+
+
+        index("test", "type1", "11", "foo", "bar");
+        index("test", "type1", "12", "foo", "bar");
+        index("test", "type1", "2", "name", "An other title about equal length");
+        refresh();
+
+        // test phrase suggestion but nothing matches
+        searchResponse = client().prepareSearch()
+                .setSize(0)
+                .suggest(
+                        new SuggestBuilder().setGlobalText("tetsting sugestion").addSuggestion("did_you_mean",
+                                phraseSuggestion("name").maxErrors(5.0f)))
+                .get();
+
+        assertNoFailures(searchResponse);
+        suggest = searchResponse.getSuggest();
+        assertSuggestionSize(suggest, 0, 0, "did_you_mean");
+        assertThat(suggest.getSuggestion("did_you_mean").getEntries().get(0).getText().string(), equalTo("tetsting sugestion"));
+
+        // finally indexing a document that will produce some meaningful suggestion
+        index("test", "type1", "1", "name", "Just testing the suggestions api");
+        refresh();
+
+        searchResponse = client().prepareSearch()
+                .setSize(0)
+                .suggest(
+                        new SuggestBuilder().setGlobalText("tetsting sugestion").addSuggestion("did_you_mean",
+                                phraseSuggestion("name").maxErrors(5.0f)))
+                .get();
+
+        assertNoFailures(searchResponse);
+        suggest = searchResponse.getSuggest();
+        assertSuggestionSize(suggest, 0, 3, "did_you_mean");
+        assertSuggestion(suggest, 0, 0, "did_you_mean", "testing suggestions");
     }
 
     /**
@@ -972,11 +1033,83 @@ public class SuggestSearchIT extends ESIntegTestCase {
         assertSuggestionSize(searchSuggest, 0, 25480, "title");  // Just to prove that we've run through a ton of options
 
         suggest.size(1);
-        long start = System.currentTimeMillis();
         searchSuggest = searchSuggest("united states house of representatives elections in washington 2006", "title", suggest);
-        long total = System.currentTimeMillis() - start;
         assertSuggestion(searchSuggest, 0, 0, "title", "united states house of representatives elections in washington 2006");
-        // assertThat(total, lessThan(1000L)); // Takes many seconds without fix - just for debugging
+    }
+
+    public void testSuggestWithFieldAlias() throws Exception {
+        XContentBuilder mapping = XContentFactory.jsonBuilder()
+            .startObject()
+                .startObject("type")
+                    .startObject("properties")
+                        .startObject("text")
+                            .field("type", "keyword")
+                        .endObject()
+                        .startObject("alias")
+                            .field("type", "alias")
+                            .field("path", "text")
+                        .endObject()
+                    .endObject()
+                .endObject()
+            .endObject();
+        assertAcked(prepareCreate("test").addMapping("type", mapping));
+
+        List<IndexRequestBuilder> builders = new ArrayList<>();
+        builders.add(client().prepareIndex("test", "type").setSource("text", "apple"));
+        builders.add(client().prepareIndex("test", "type").setSource("text", "mango"));
+        builders.add(client().prepareIndex("test", "type").setSource("text", "papaya"));
+        indexRandom(true, false, builders);
+
+        TermSuggestionBuilder termSuggest = termSuggestion("alias").text("appple");
+
+        Suggest searchSuggest = searchSuggest("suggestion", termSuggest);
+        assertSuggestion(searchSuggest, 0, "suggestion", "apple");
+    }
+
+    public void testPhraseSuggestMinDocFreq() throws Exception {
+        XContentBuilder mapping = XContentFactory.jsonBuilder()
+            .startObject()
+                .startObject("type")
+                    .startObject("properties")
+                        .startObject("text")
+                            .field("type", "keyword")
+                        .endObject()
+                    .endObject()
+                .endObject()
+            .endObject();
+        assertAcked(prepareCreate("test")
+            .setSettings(Settings.builder().put("index.number_of_shards", 1).build())
+            .addMapping("type", mapping));
+
+        List<IndexRequestBuilder> builders = new ArrayList<>();
+        builders.add(client().prepareIndex("test", "type").setSource("text", "apple"));
+        builders.add(client().prepareIndex("test", "type").setSource("text", "apple"));
+        builders.add(client().prepareIndex("test", "type").setSource("text", "apple"));
+        builders.add(client().prepareIndex("test", "type").setSource("text", "appfle"));
+        indexRandom(true, false, builders);
+
+        PhraseSuggestionBuilder phraseSuggest = phraseSuggestion("text").text("appple")
+            .size(2)
+            .addCandidateGenerator(new DirectCandidateGeneratorBuilder("text")
+                .suggestMode("popular"));
+
+        Suggest searchSuggest = searchSuggest("suggestion", phraseSuggest);
+        assertSuggestion(searchSuggest, 0, "suggestion", 2, "apple", "appfle");
+
+        phraseSuggest = phraseSuggestion("text").text("appple")
+            .addCandidateGenerator(new DirectCandidateGeneratorBuilder("text")
+                .suggestMode("popular")
+                .minDocFreq(2));
+
+        searchSuggest = searchSuggest("suggestion", phraseSuggest);
+        assertSuggestion(searchSuggest, 0, "suggestion", 1,"apple");
+
+        phraseSuggest = phraseSuggestion("text").text("appple")
+            .addCandidateGenerator(new DirectCandidateGeneratorBuilder("text")
+                .suggestMode("popular")
+                .minDocFreq(2));
+        searchSuggest = searchSuggest("suggestion", phraseSuggest);
+        assertSuggestion(searchSuggest, 0, "suggestion", 1,"apple");
     }
 
     @Override
@@ -1139,7 +1272,7 @@ public class SuggestSearchIT extends ESIntegTestCase {
                         .endObject()
                         .endObject());
 
-        PhraseSuggestionBuilder in = suggest.collateQuery(filterStr);
+        suggest.collateQuery(filterStr);
         try {
             searchSuggest("united states house of representatives elections in washington 2006", numShards.numPrimaries, namedSuggestion);
             fail("Post filter error has been swallowed");
@@ -1157,7 +1290,6 @@ public class SuggestSearchIT extends ESIntegTestCase {
                         .endObject());
 
 
-        PhraseSuggestionBuilder phraseSuggestWithNoParams = suggest.collateQuery(collateWithParams);
         try {
             searchSuggest("united states house of representatives elections in washington 2006", numShards.numPrimaries, namedSuggestion);
             fail("Malformed query (lack of additional params) should fail");
@@ -1204,7 +1336,7 @@ public class SuggestSearchIT extends ESIntegTestCase {
             suggestBuilder.addSuggestion(suggestion.getKey(), suggestion.getValue());
         }
         builder.suggest(suggestBuilder);
-        SearchResponse actionGet = builder.execute().actionGet();
+        SearchResponse actionGet = builder.get();
         assertThat(Arrays.toString(actionGet.getShardFailures()), actionGet.getFailedShards(), equalTo(expectShardsFailed));
         return actionGet.getSuggest();
     }

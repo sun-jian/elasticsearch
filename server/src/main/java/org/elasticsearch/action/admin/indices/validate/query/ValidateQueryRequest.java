@@ -19,7 +19,6 @@
 
 package org.elasticsearch.action.admin.indices.validate.query;
 
-import org.elasticsearch.Version;
 import org.elasticsearch.action.ActionRequestValidationException;
 import org.elasticsearch.action.ValidateActions;
 import org.elasticsearch.action.support.IndicesOptions;
@@ -27,6 +26,8 @@ import org.elasticsearch.action.support.broadcast.BroadcastRequest;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
+import org.elasticsearch.common.xcontent.ToXContentObject;
+import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.index.query.MatchAllQueryBuilder;
 import org.elasticsearch.index.query.QueryBuilder;
 
@@ -38,7 +39,7 @@ import java.util.Arrays;
  * <p>
  * The request requires the query to be set using {@link #query(QueryBuilder)}
  */
-public class ValidateQueryRequest extends BroadcastRequest<ValidateQueryRequest> {
+public class ValidateQueryRequest extends BroadcastRequest<ValidateQueryRequest> implements ToXContentObject {
 
     private QueryBuilder query = new MatchAllQueryBuilder();
 
@@ -52,6 +53,21 @@ public class ValidateQueryRequest extends BroadcastRequest<ValidateQueryRequest>
 
     public ValidateQueryRequest() {
         this(Strings.EMPTY_ARRAY);
+    }
+
+    public ValidateQueryRequest(StreamInput in) throws IOException {
+        super(in);
+        query = in.readNamedWriteable(QueryBuilder.class);
+        int typesSize = in.readVInt();
+        if (typesSize > 0) {
+            types = new String[typesSize];
+            for (int i = 0; i < typesSize; i++) {
+                types[i] = in.readString();
+            }
+        }
+        explain = in.readBoolean();
+        rewrite = in.readBoolean();
+        allShards = in.readBoolean();
     }
 
     /**
@@ -86,14 +102,22 @@ public class ValidateQueryRequest extends BroadcastRequest<ValidateQueryRequest>
 
     /**
      * The types of documents the query will run against. Defaults to all types.
+     *
+     * @deprecated Types are in the process of being removed. Instead of using a type, prefer to
+     * filter on a field on the document.
      */
+    @Deprecated
     public String[] types() {
         return this.types;
     }
 
     /**
      * The types of documents the query will run against. Defaults to all types.
+     *
+     * @deprecated Types are in the process of being removed. Instead of using a type, prefer to
+     * filter on a field on the document.
      */
+    @Deprecated
     public ValidateQueryRequest types(String... types) {
         this.types = types;
         return this;
@@ -142,24 +166,6 @@ public class ValidateQueryRequest extends BroadcastRequest<ValidateQueryRequest>
     }
 
     @Override
-    public void readFrom(StreamInput in) throws IOException {
-        super.readFrom(in);
-        query = in.readNamedWriteable(QueryBuilder.class);
-        int typesSize = in.readVInt();
-        if (typesSize > 0) {
-            types = new String[typesSize];
-            for (int i = 0; i < typesSize; i++) {
-                types[i] = in.readString();
-            }
-        }
-        explain = in.readBoolean();
-        rewrite = in.readBoolean();
-        if (in.getVersion().onOrAfter(Version.V_5_4_0)) {
-            allShards = in.readBoolean();
-        }
-    }
-
-    @Override
     public void writeTo(StreamOutput out) throws IOException {
         super.writeTo(out);
         out.writeNamedWriteable(query);
@@ -169,14 +175,20 @@ public class ValidateQueryRequest extends BroadcastRequest<ValidateQueryRequest>
         }
         out.writeBoolean(explain);
         out.writeBoolean(rewrite);
-        if (out.getVersion().onOrAfter(Version.V_5_4_0)) {
-            out.writeBoolean(allShards);
-        }
+        out.writeBoolean(allShards);
     }
 
     @Override
     public String toString() {
         return "[" + Arrays.toString(indices) + "]" + Arrays.toString(types) + ", query[" + query + "], explain:" + explain +
                 ", rewrite:" + rewrite + ", all_shards:" + allShards;
+    }
+
+    @Override
+    public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
+        builder.startObject();
+        builder.field("query");
+        query.toXContent(builder, params);
+        return builder.endObject();
     }
 }

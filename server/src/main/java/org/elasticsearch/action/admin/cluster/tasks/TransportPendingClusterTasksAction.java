@@ -24,25 +24,29 @@ import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.master.TransportMasterNodeReadAction;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.block.ClusterBlockException;
-import org.elasticsearch.cluster.block.ClusterBlockLevel;
 import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.cluster.service.PendingClusterTask;
 import org.elasticsearch.common.inject.Inject;
-import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.io.stream.StreamInput;
+import org.elasticsearch.tasks.Task;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
 
+import java.io.IOException;
 import java.util.List;
 
-public class TransportPendingClusterTasksAction extends TransportMasterNodeReadAction<PendingClusterTasksRequest, PendingClusterTasksResponse> {
+public class TransportPendingClusterTasksAction
+        extends TransportMasterNodeReadAction<PendingClusterTasksRequest, PendingClusterTasksResponse> {
 
     private final ClusterService clusterService;
 
     @Inject
-    public TransportPendingClusterTasksAction(Settings settings, TransportService transportService, ClusterService clusterService,
-                                              ThreadPool threadPool, ActionFilters actionFilters, IndexNameExpressionResolver indexNameExpressionResolver) {
-        super(settings, PendingClusterTasksAction.NAME, transportService, clusterService, threadPool, actionFilters, PendingClusterTasksRequest::new, indexNameExpressionResolver);
+    public TransportPendingClusterTasksAction(TransportService transportService, ClusterService clusterService,
+                                              ThreadPool threadPool, ActionFilters actionFilters,
+                                              IndexNameExpressionResolver indexNameExpressionResolver) {
+        super(PendingClusterTasksAction.NAME, transportService, clusterService, threadPool, actionFilters,
+            PendingClusterTasksRequest::new, indexNameExpressionResolver);
         this.clusterService = clusterService;
     }
 
@@ -53,17 +57,18 @@ public class TransportPendingClusterTasksAction extends TransportMasterNodeReadA
     }
 
     @Override
+    protected PendingClusterTasksResponse read(StreamInput in) throws IOException {
+        return new PendingClusterTasksResponse(in);
+    }
+
+    @Override
     protected ClusterBlockException checkBlock(PendingClusterTasksRequest request, ClusterState state) {
-        return state.blocks().globalBlockedException(ClusterBlockLevel.METADATA_READ);
+        return null;
     }
 
     @Override
-    protected PendingClusterTasksResponse newResponse() {
-        return new PendingClusterTasksResponse();
-    }
-
-    @Override
-    protected void masterOperation(PendingClusterTasksRequest request, ClusterState state, ActionListener<PendingClusterTasksResponse> listener) {
+    protected void masterOperation(Task task, PendingClusterTasksRequest request, ClusterState state,
+                                   ActionListener<PendingClusterTasksResponse> listener) {
         logger.trace("fetching pending tasks from cluster service");
         final List<PendingClusterTask> pendingTasks = clusterService.getMasterService().pendingTasks();
         logger.trace("done fetching pending tasks from cluster service");

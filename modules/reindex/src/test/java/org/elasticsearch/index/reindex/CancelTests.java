@@ -19,6 +19,7 @@
 
 package org.elasticsearch.index.reindex;
 
+import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.elasticsearch.action.ActionFuture;
 import org.elasticsearch.action.admin.cluster.node.tasks.cancel.CancelTasksRequest;
@@ -26,7 +27,6 @@ import org.elasticsearch.action.admin.cluster.node.tasks.list.ListTasksResponse;
 import org.elasticsearch.action.ingest.DeletePipelineRequest;
 import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.bytes.BytesReference;
-import org.elasticsearch.common.logging.Loggers;
 import org.elasticsearch.common.xcontent.XContentType;
 import org.elasticsearch.index.IndexModule;
 import org.elasticsearch.index.engine.Engine;
@@ -37,7 +37,6 @@ import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.ingest.IngestTestPlugin;
 import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.tasks.TaskInfo;
-import org.elasticsearch.test.junit.annotations.TestLogging;
 import org.hamcrest.Matcher;
 import org.junit.Before;
 
@@ -60,7 +59,6 @@ import static org.hamcrest.Matchers.hasSize;
  * different cancellation places - that is the responsibility of AsyncBulkByScrollActionTests which have more precise control to
  * simulate failures but does not exercise important portion of the stack like transport and task management.
  */
-@TestLogging("org.elasticsearch.index.reindex:DEBUG,org.elasticsearch.action.bulk:DEBUG")
 public class CancelTests extends ReindexTestCase {
 
     protected static final String INDEX = "reindex-cancel-index";
@@ -122,7 +120,7 @@ public class CancelTests extends ReindexTestCase {
         logger.debug("waiting for updates to be blocked");
         boolean blocked = awaitBusy(
             () -> ALLOWED_OPERATIONS.hasQueuedThreads() && ALLOWED_OPERATIONS.availablePermits() == 0,
-            1, TimeUnit.MINUTES); // 10 seconds is usually fine but on heavilly loaded machines this can wake a while
+            1, TimeUnit.MINUTES); // 10 seconds is usually fine but on heavily loaded machines this can take a while
         assertTrue("updates blocked", blocked);
 
         // Status should show the task running
@@ -195,7 +193,7 @@ public class CancelTests extends ReindexTestCase {
         assertion.assertThat(response, numDocs, numModifiedDocs);
     }
 
-    private TaskInfo findTaskToCancel(String actionName, int workerCount) {
+    public static TaskInfo findTaskToCancel(String actionName, int workerCount) {
         ListTasksResponse tasks;
         long start = System.nanoTime();
         do {
@@ -216,7 +214,7 @@ public class CancelTests extends ReindexTestCase {
             assertThat(response, matcher().created(modified).reasonCancelled(equalTo("by user request")));
 
             refresh("dest");
-            assertHitCount(client().prepareSearch("dest").setTypes(TYPE).setSize(0).get(), modified);
+            assertHitCount(client().prepareSearch("dest").setSize(0).get(), modified);
         }, equalTo("reindex from [" + INDEX + "] to [dest][" + TYPE + "]"));
     }
 
@@ -251,7 +249,7 @@ public class CancelTests extends ReindexTestCase {
                 (response, total, modified) -> {
                     assertThat(response, matcher().created(modified).reasonCancelled(equalTo("by user request")).slices(hasSize(5)));
                     refresh("dest");
-                    assertHitCount(client().prepareSearch("dest").setTypes(TYPE).setSize(0).get(), modified);
+                    assertHitCount(client().prepareSearch("dest").setSize(0).get(), modified);
                 },
                 equalTo("reindex from [" + INDEX + "] to [dest][" + TYPE + "]"));
     }
@@ -298,7 +296,7 @@ public class CancelTests extends ReindexTestCase {
     }
 
     public static class BlockingOperationListener implements IndexingOperationListener {
-        private static final Logger log = Loggers.getLogger(CancelTests.class);
+        private static final Logger log = LogManager.getLogger(CancelTests.class);
 
         @Override
         public Engine.Index preIndex(ShardId shardId, Engine.Index index) {

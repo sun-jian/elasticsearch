@@ -5,27 +5,18 @@
  */
 package org.elasticsearch.xpack.security.authc.saml;
 
-import java.time.Clock;
-import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
-import java.util.Objects;
-import java.util.function.Predicate;
-import java.util.stream.Collectors;
-
 import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.elasticsearch.ElasticsearchSecurityException;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.collect.Tuple;
 import org.elasticsearch.common.unit.TimeValue;
-import org.elasticsearch.xpack.core.security.authc.RealmConfig;
 import org.opensaml.core.xml.XMLObject;
 import org.opensaml.saml.saml2.core.Assertion;
 import org.opensaml.saml.saml2.core.Attribute;
 import org.opensaml.saml.saml2.core.AttributeStatement;
 import org.opensaml.saml.saml2.core.Audience;
 import org.opensaml.saml.saml2.core.AudienceRestriction;
+import org.opensaml.saml.saml2.core.AuthnStatement;
 import org.opensaml.saml.saml2.core.Conditions;
 import org.opensaml.saml.saml2.core.EncryptedAssertion;
 import org.opensaml.saml.saml2.core.EncryptedAttribute;
@@ -41,6 +32,14 @@ import org.opensaml.xmlsec.encryption.support.DecryptionException;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import java.util.Objects;
+import java.util.stream.Collectors;
+
 import static org.elasticsearch.xpack.security.authc.saml.SamlUtils.samlException;
 import static org.opensaml.saml.saml2.core.SubjectConfirmation.METHOD_BEARER;
 
@@ -51,12 +50,11 @@ class SamlAuthenticator extends SamlRequestHandler {
 
     private static final String RESPONSE_TAG_NAME = "Response";
 
-    SamlAuthenticator(RealmConfig realmConfig,
-                      Clock clock,
+    SamlAuthenticator(Clock clock,
                       IdpConfiguration idp,
                       SpConfiguration sp,
                       TimeValue maxSkew) {
-        super(realmConfig, clock, idp, sp, maxSkew);
+        super(clock, idp, sp, maxSkew);
     }
 
     /**
@@ -107,8 +105,7 @@ class SamlAuthenticator extends SamlRequestHandler {
             throw samlException("SAML Response has no status code");
         }
         if (isSuccess(status) == false) {
-            throw samlException("SAML Response is not a 'success' response: Code={} Message={} Detail={}",
-                    status.getStatusCode().getValue(), getMessage(status), getDetail(status));
+            throw samlException("SAML Response is not a 'success' response: {}", getStatusCodeMessage(status));
         }
         checkIssuer(response.getIssuer(), response);
         checkResponseDestination(response);
@@ -138,6 +135,32 @@ class SamlAuthenticator extends SamlRequestHandler {
         return new SamlAttributes(nameId, session, attributes);
     }
 
+    private String getStatusCodeMessage(Status status) {
+        StatusCode firstLevel = status.getStatusCode();
+        StatusCode subLevel = firstLevel.getStatusCode();
+        StringBuilder sb = new StringBuilder();
+        if (StatusCode.REQUESTER.equals(firstLevel.getValue())) {
+            sb.append("The SAML IdP did not grant the request. It indicated that the Elastic Stack side sent something invalid (");
+        } else if (StatusCode.RESPONDER.equals(firstLevel.getValue())) {
+            sb.append("The request could not be granted due to an error in the SAML IDP side (");
+        } else if (StatusCode.VERSION_MISMATCH.equals(firstLevel.getValue())) {
+            sb.append("The request could not be granted because the SAML IDP doesn't support SAML 2.0 (");
+        } else {
+            sb.append("The request could not be granted, the SAML IDP responded with a non-standard Status code (");
+        }
+        sb.append(firstLevel.getValue()).append(").");
+        if (getMessage(status) != null) {
+            sb.append(" Message: [").append(getMessage(status)).append("]");
+        }
+        if (getDetail(status) != null) {
+            sb.append(" Detail: [").append(getDetail(status)).append("]");
+        }
+        if (null != subLevel) {
+            sb.append(" Specific status code which might indicate what the issue is: [").append(subLevel.getValue()).append("]");
+        }
+        return sb.toString();
+    }
+
     private String getMessage(Status status) {
         final StatusMessage sm = status.getStatusMessage();
         return sm == null ? null : sm.getMessage();
@@ -159,8 +182,10 @@ class SamlAuthenticator extends SamlRequestHandler {
     private void checkResponseDestination(Response response) {
         final String asc = getSpConfiguration().getAscUrl();
         if (asc.equals(response.getDestination()) == false) {
-            throw samlException("SAML response " + response.getID() + " is for destination " + response.getDestination()
+            if (response.isSigned() || Strings.hasText(response.getDestination())) {
+                throw samlException("SAML response " + response.getID() + " is for destination " + response.getDestination()
                     + " but this realm uses " + asc);
+            }
         }
     }
 
@@ -217,6 +242,7 @@ class SamlAuthenticator extends SamlRequestHandler {
         checkConditions(assertion.getConditions());
         checkIssuer(assertion.getIssuer(), assertion);
         checkSubject(assertion.getSubject(), assertion, allowedSamlRequestIds);
+        checkAuthnStatement(assertion.getAuthnStatements());
 
         List<Attribute> attributes = new ArrayList<>();
         for (AttributeStatement statement : assertion.getAttributeStatements()) {
@@ -232,6 +258,33 @@ class SamlAuthenticator extends SamlRequestHandler {
             }
         }
         return attributes;
+    }
+
+    private void checkAuthnStatement(List<AuthnStatement> authnStatements) {
+        if (authnStatements.size() != 1) {
+            throw samlException("SAML Assertion subject contains {} Authn Statements while exactly one was expected.",
+                authnStatements.size());
+        }
+        final AuthnStatement authnStatement = authnStatements.get(0);
+        // "past now" that is now - the maximum skew we will tolerate. Essentially "if our clock is 2min fast, what time is it now?"
+        final Instant now = now();
+        final Instant pastNow = now.minusMillis(maxSkewInMillis());
+        if (authnStatement.getSessionNotOnOrAfter() != null &&
+            pastNow.isBefore(toInstant(authnStatement.getSessionNotOnOrAfter())) == false) {
+            throw samlException("Rejecting SAML assertion's Authentication Statement because [{}] is on/after [{}]", pastNow,
+                authnStatement.getSessionNotOnOrAfter());
+        }
+        List<String> reqAuthnCtxClassRef = this.getSpConfiguration().getReqAuthnCtxClassRef();
+        if (reqAuthnCtxClassRef.isEmpty() == false) {
+            String authnCtxClassRefValue = null;
+            if (authnStatement.getAuthnContext() != null && authnStatement.getAuthnContext().getAuthnContextClassRef() != null) {
+                authnCtxClassRefValue = authnStatement.getAuthnContext().getAuthnContextClassRef().getAuthnContextClassRef();
+            }
+            if (Strings.isNullOrEmpty(authnCtxClassRefValue) || reqAuthnCtxClassRef.contains(authnCtxClassRefValue) == false) {
+                throw samlException("Rejecting SAML assertion as the AuthnContextClassRef [{}] is not one of the ({}) that were " +
+                    "requested in the corresponding AuthnRequest", authnCtxClassRefValue, reqAuthnCtxClassRef);
+            }
+        }
     }
 
     private Attribute decrypt(EncryptedAttribute encrypted) {
@@ -252,7 +305,7 @@ class SamlAuthenticator extends SamlRequestHandler {
             if (logger.isTraceEnabled()) {
                 logger.trace("SAML Assertion was intended for the following Service providers: {}",
                         conditions.getAudienceRestrictions().stream().map(r -> text(r, 32))
-                                .collect(Collectors.joining(" | ")));
+                            .collect(Collectors.joining(" | ")));
                 logger.trace("SAML Assertion is only valid between: " + conditions.getNotBefore() + " and " + conditions.getNotOnOrAfter());
             }
             checkAudienceRestrictions(conditions.getAudienceRestrictions());
@@ -300,13 +353,35 @@ class SamlAuthenticator extends SamlRequestHandler {
     }
 
     private void checkAudienceRestrictions(List<AudienceRestriction> restrictions) {
-        final String spEntityId = this.getSpConfiguration().getEntityId();
-        final Predicate<AudienceRestriction> predicate = ar ->
-                ar.getAudiences().stream().map(Audience::getAudienceURI).anyMatch(spEntityId::equals);
-        if (restrictions.stream().allMatch(predicate) == false) {
+        if (restrictions.stream().allMatch(this::checkAudienceRestriction) == false) {
             throw samlException("Conditions [{}] do not match required audience [{}]",
-                    restrictions.stream().map(r -> text(r, 32)).collect(Collectors.joining(" | ")), getSpConfiguration().getEntityId());
+                restrictions.stream().map(r -> text(r, 56, 8)).collect(Collectors.joining(" | ")), getSpConfiguration().getEntityId());
         }
+    }
+
+    private boolean checkAudienceRestriction(AudienceRestriction restriction) {
+        final String spEntityId = this.getSpConfiguration().getEntityId();
+        if (restriction.getAudiences().stream().map(Audience::getAudienceURI).anyMatch(spEntityId::equals) == false) {
+            restriction.getAudiences().stream().map(Audience::getAudienceURI).forEach(uri -> {
+                int diffChar;
+                for (diffChar = 0; diffChar < uri.length() && diffChar < spEntityId.length(); diffChar++) {
+                    if (uri.charAt(diffChar) != spEntityId.charAt(diffChar)) {
+                        break;
+                    }
+                }
+                // If the difference is less than half the length of the string, show it in detail
+                if (diffChar >= spEntityId.length() / 2) {
+                    logger.info("Audience restriction [{}] does not match required audience [{}] " +
+                            "(difference starts at character [#{}] [{}] vs [{}])",
+                        uri, spEntityId, diffChar, uri.substring(diffChar), spEntityId.substring(diffChar));
+                } else {
+                    logger.info("Audience restriction [{}] does not match required audience [{}]", uri, spEntityId);
+
+                }
+            });
+            return false;
+        }
+        return true;
     }
 
     private void checkLifetimeRestrictions(Conditions conditions) {

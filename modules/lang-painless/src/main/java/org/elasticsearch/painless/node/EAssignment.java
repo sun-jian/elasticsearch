@@ -21,14 +21,15 @@ package org.elasticsearch.painless.node;
 
 
 import org.elasticsearch.painless.AnalyzerCaster;
+import org.elasticsearch.painless.CompilerSettings;
 import org.elasticsearch.painless.DefBootstrap;
-import org.elasticsearch.painless.Definition.Cast;
-import org.elasticsearch.painless.Definition.def;
 import org.elasticsearch.painless.Globals;
 import org.elasticsearch.painless.Locals;
 import org.elasticsearch.painless.Location;
 import org.elasticsearch.painless.MethodWriter;
 import org.elasticsearch.painless.Operation;
+import org.elasticsearch.painless.lookup.PainlessCast;
+import org.elasticsearch.painless.lookup.def;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -49,8 +50,8 @@ public final class EAssignment extends AExpression {
     private boolean cat = false;
     private Class<?> promote = null;
     private Class<?> shiftDistance; // for shifts, the RHS is promoted independently
-    private Cast there = null;
-    private Cast back = null;
+    private PainlessCast there = null;
+    private PainlessCast back = null;
 
     public EAssignment(Location location, AExpression lhs, AExpression rhs, boolean pre, boolean post, Operation operation) {
         super(location);
@@ -63,9 +64,21 @@ public final class EAssignment extends AExpression {
     }
 
     @Override
+    void storeSettings(CompilerSettings settings) {
+        lhs.storeSettings(settings);
+
+        if (rhs != null) {
+            rhs.storeSettings(settings);
+        }
+    }
+
+    @Override
     void extractVariables(Set<String> variables) {
         lhs.extractVariables(variables);
-        rhs.extractVariables(variables);
+
+        if (rhs != null) {
+            rhs.extractVariables(variables);
+        }
     }
 
     @Override

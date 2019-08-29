@@ -1,17 +1,19 @@
-[role="xpack"]
-[[xpack-commands]]
-= {xpack} Commands
+[[commands]]
+= Command line tools
 
 [partintro]
 --
 
-{xpack} includes commands that help you configure security:
+{es} provides the following tools for configuring security and performing other 
+tasks from the command line:
 
 * <<certgen>>
 * <<certutil>>
-* <<migrate-tool>>
+* <<elasticsearch-croneval>>
+* <<node-tool>>
 * <<saml-metadata>>
 * <<setup-passwords>>
+* <<shard-tool>>
 * <<syskeygen>>
 * <<users-command>>
 
@@ -19,8 +21,10 @@
 
 include::certgen.asciidoc[]
 include::certutil.asciidoc[]
-include::migrate-tool.asciidoc[]
+include::croneval.asciidoc[]
+include::node-tool.asciidoc[]
 include::saml-metadata.asciidoc[]
 include::setup-passwords.asciidoc[]
+include::shard-tool.asciidoc[]
 include::syskeygen.asciidoc[]
 include::users-command.asciidoc[]

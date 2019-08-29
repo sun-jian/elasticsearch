@@ -7,7 +7,7 @@ produces a single token.
 
 The `normalizer` is applied prior to indexing the keyword, as well as at
 search-time when the `keyword` field is searched via a query parser such as
-the <<query-dsl-match-query,`match`>> query or via a term level query 
+the <<query-dsl-match-query,`match`>> query or via a term-level query 
 such as the <<query-dsl-term-query,`term`>> query.
 
 [source,js]
@@ -26,12 +26,10 @@ PUT index
     }
   },
   "mappings": {
-    "_doc": {
-      "properties": {
-        "foo": {
-          "type": "keyword",
-          "normalizer": "my_normalizer"
-        }
+    "properties": {
+      "foo": {
+        "type": "keyword",
+        "normalizer": "my_normalizer"
       }
     }
   }
@@ -89,7 +87,10 @@ both index and query time.
     "failed": 0
   },
   "hits": {
-    "total": 2,
+    "total" : {
+        "value": 2,
+        "relation": "eq"
+    },
     "max_score": 0.47000363,
     "hits": [
       {
@@ -150,8 +151,11 @@ returns
     "failed": 0
   },
   "hits": {
-    "total": 3,
-    "max_score": 0.0,
+    "total" : {
+        "value": 3,
+        "relation": "eq"
+    },
+    "max_score": null,
     "hits": []
   },
   "aggregations": {

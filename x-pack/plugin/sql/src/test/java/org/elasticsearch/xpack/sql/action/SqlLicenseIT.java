@@ -5,6 +5,7 @@
  */
 package org.elasticsearch.xpack.sql.action;
 
+import org.apache.lucene.util.LuceneTestCase;
 import org.elasticsearch.ElasticsearchSecurityException;
 import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.action.support.WriteRequest;
@@ -20,12 +21,7 @@ import org.elasticsearch.search.fetch.subphase.DocValueFieldsContext;
 import org.elasticsearch.search.fetch.subphase.FetchSourceContext;
 import org.elasticsearch.test.hamcrest.ElasticsearchAssertions;
 import org.elasticsearch.transport.Netty4Plugin;
-import org.elasticsearch.xpack.sql.plugin.SqlQueryAction;
-import org.elasticsearch.xpack.sql.plugin.SqlQueryRequestBuilder;
-import org.elasticsearch.xpack.sql.plugin.SqlQueryResponse;
-import org.elasticsearch.xpack.sql.plugin.SqlTranslateAction;
-import org.elasticsearch.xpack.sql.plugin.SqlTranslateRequestBuilder;
-import org.elasticsearch.xpack.sql.plugin.SqlTranslateResponse;
+import org.elasticsearch.transport.nio.NioTransportPlugin;
 import org.hamcrest.Matchers;
 import org.junit.Before;
 
@@ -39,6 +35,7 @@ import static org.elasticsearch.license.XPackLicenseStateTests.randomTrialBasicS
 import static org.elasticsearch.license.XPackLicenseStateTests.randomTrialOrPlatinumMode;
 import static org.hamcrest.Matchers.equalTo;
 
+@LuceneTestCase.AwaitsFix(bugUrl = "https://github.com/elastic/elasticsearch/issues/37320")
 public class SqlLicenseIT extends AbstractLicensesIntegrationTestCase {
     @Override
     protected boolean ignoreExternalCluster() {
@@ -66,9 +63,10 @@ public class SqlLicenseIT extends AbstractLicensesIntegrationTestCase {
     @Override
     protected Settings nodeSettings(int nodeOrdinal) {
         // Enable http so we can test JDBC licensing because only exists on the REST layer.
+        String httpPlugin = randomBoolean() ? Netty4Plugin.NETTY_HTTP_TRANSPORT_NAME : NioTransportPlugin.NIO_TRANSPORT_NAME;
         return Settings.builder()
                 .put(super.nodeSettings(nodeOrdinal))
-                .put(NetworkModule.HTTP_TYPE_KEY, Netty4Plugin.NETTY_HTTP_TRANSPORT_NAME)
+                .put(NetworkModule.HTTP_TYPE_KEY, httpPlugin)
                 .build();
     }
 
@@ -156,7 +154,7 @@ public class SqlLicenseIT extends AbstractLicensesIntegrationTestCase {
             .query("SELECT * FROM test").get();
         SearchSourceBuilder source = response.source();
         assertThat(source.docValueFields(), Matchers.contains(
-                new DocValueFieldsContext.FieldAndFormat("count", DocValueFieldsContext.USE_DEFAULT_FORMAT)));
+                new DocValueFieldsContext.FieldAndFormat("count", null)));
         FetchSourceContext fetchSource = source.fetchSource();
         assertThat(fetchSource.includes(), Matchers.arrayContaining("data"));
     }
@@ -166,8 +164,8 @@ public class SqlLicenseIT extends AbstractLicensesIntegrationTestCase {
     private void setupTestIndex() {
         ElasticsearchAssertions.assertAcked(client().admin().indices().prepareCreate("test").get());
         client().prepareBulk()
-                .add(new IndexRequest("test", "doc", "1").source("data", "bar", "count", 42))
-                .add(new IndexRequest("test", "doc", "2").source("data", "baz", "count", 43))
+                .add(new IndexRequest("test").id("1").source("data", "bar", "count", 42))
+                .add(new IndexRequest("test").id("2").source("data", "baz", "count", 43))
                 .setRefreshPolicy(WriteRequest.RefreshPolicy.IMMEDIATE)
                 .get();
     }

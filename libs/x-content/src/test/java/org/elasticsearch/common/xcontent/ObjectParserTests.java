@@ -33,7 +33,10 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasSize;
@@ -222,6 +225,7 @@ public class ObjectParserTests extends ESTestCase {
     public void testFailOnValueType() throws IOException {
         XContentParser parser = createParser(JsonXContent.jsonXContent, "{\"numeric_value\" : false}");
         class TestStruct {
+            @SuppressWarnings("unused")
             public String test;
         }
         ObjectParser<TestStruct, Void> objectParser = new ObjectParser<>("foo");
@@ -295,7 +299,7 @@ public class ObjectParserTests extends ESTestCase {
 
     enum TestEnum {
         FOO, BAR
-    };
+    }
 
     public void testParseEnumFromString() throws IOException {
         class TestStruct {
@@ -649,6 +653,49 @@ public class ObjectParserTests extends ESTestCase {
         assertThat(ex.getMessage(), containsString("[foo] failed to parse field [int_array]"));
     }
 
+    public void testNoopDeclareObject() throws IOException {
+        ObjectParser<AtomicReference<String>, Void> parser = new ObjectParser<>("noopy", AtomicReference::new);
+        parser.declareString(AtomicReference::set, new ParseField("body"));
+        parser.declareObject((a,b) -> {}, (p, c) -> null, new ParseField("noop"));
+
+        assertEquals("i", parser.parse(createParser(JsonXContent.jsonXContent, "{\"body\": \"i\"}"), null).get());
+        Exception garbageException = expectThrows(IllegalStateException.class, () -> parser.parse(
+                createParser(JsonXContent.jsonXContent, "{\"noop\": {\"garbage\": \"shouldn't\"}}"),
+                null));
+        assertEquals("parser for [noop] did not end on END_OBJECT", garbageException.getMessage());
+        Exception sneakyException = expectThrows(IllegalStateException.class, () -> parser.parse(
+                createParser(JsonXContent.jsonXContent, "{\"noop\": {\"body\": \"shouldn't\"}}"),
+                null));
+        assertEquals("parser for [noop] did not end on END_OBJECT", sneakyException.getMessage());
+    }
+
+    public void testNoopDeclareField() throws IOException {
+        ObjectParser<AtomicReference<String>, Void> parser = new ObjectParser<>("noopy", AtomicReference::new);
+        parser.declareString(AtomicReference::set, new ParseField("body"));
+        parser.declareField((a,b) -> {}, (p, c) -> null, new ParseField("noop"), ValueType.STRING_ARRAY);
+
+        assertEquals("i", parser.parse(createParser(JsonXContent.jsonXContent, "{\"body\": \"i\"}"), null).get());
+        Exception e = expectThrows(IllegalStateException.class, () -> parser.parse(
+                createParser(JsonXContent.jsonXContent, "{\"noop\": [\"ignored\"]}"),
+                null));
+        assertEquals("parser for [noop] did not end on END_ARRAY", e.getMessage());
+    }
+
+    public void testNoopDeclareObjectArray() throws IOException {
+        ObjectParser<AtomicReference<String>, Void> parser = new ObjectParser<>("noopy", AtomicReference::new);
+        parser.declareString(AtomicReference::set, new ParseField("body"));
+        parser.declareObjectArray((a,b) -> {}, (p, c) -> null, new ParseField("noop"));
+
+        XContentParseException garbageError = expectThrows(XContentParseException.class, () -> parser.parse(
+                createParser(JsonXContent.jsonXContent, "{\"noop\": [{\"garbage\": \"shouldn't\"}}]"),
+                null));
+        assertEquals("expected value but got [FIELD_NAME]", garbageError.getCause().getMessage());
+        XContentParseException sneakyError = expectThrows(XContentParseException.class, () -> parser.parse(
+                createParser(JsonXContent.jsonXContent, "{\"noop\": [{\"body\": \"shouldn't\"}}]"),
+                null));
+        assertEquals("expected value but got [FIELD_NAME]", sneakyError.getCause().getMessage());
+    }
+
     static class NamedObjectHolder {
         public static final ObjectParser<NamedObjectHolder, Void> PARSER = new ObjectParser<>("named_object_holder",
                 NamedObjectHolder::new);
@@ -687,5 +734,42 @@ public class ObjectParserTests extends ESTestCase {
         public void setFoo(int foo) {
             this.foo = foo;
         }
+    }
+
+    private static class ObjectWithArbitraryFields {
+        String name;
+        Map<String, Object> fields = new HashMap<>();
+        void setField(String key, Object value) {
+            fields.put(key, value);
+        }
+        void setName(String name) {
+            this.name = name;
+        }
+    }
+
+    public void testConsumeUnknownFields() throws IOException {
+        XContentParser parser = createParser(JsonXContent.jsonXContent,
+            "{\n"
+                + "  \"test\" : \"foo\",\n"
+                + "  \"test_number\" : 2,\n"
+                + "  \"name\" : \"geoff\",\n"
+                + "  \"test_boolean\" : true,\n"
+                + "  \"test_null\" : null,\n"
+                + "  \"test_array\":  [1,2,3,4],\n"
+                + "  \"test_nested\": { \"field\" : \"value\", \"field2\" : [ \"list1\", \"list2\" ] }\n"
+                + "}");
+        ObjectParser<ObjectWithArbitraryFields, Void> op
+            = new ObjectParser<>("unknown", ObjectWithArbitraryFields::setField, ObjectWithArbitraryFields::new);
+        op.declareString(ObjectWithArbitraryFields::setName, new ParseField("name"));
+
+        ObjectWithArbitraryFields o = op.parse(parser, null);
+        assertEquals("geoff", o.name);
+        assertEquals(6, o.fields.size());
+        assertEquals("foo", o.fields.get("test"));
+        assertEquals(2, o.fields.get("test_number"));
+        assertEquals(true, o.fields.get("test_boolean"));
+        assertNull(o.fields.get("test_null"));
+        assertEquals(List.of(1, 2, 3, 4), o.fields.get("test_array"));
+        assertEquals(Map.of("field", "value", "field2", List.of("list1", "list2")), o.fields.get("test_nested"));
     }
 }

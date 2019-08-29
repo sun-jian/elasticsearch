@@ -8,20 +8,18 @@ package org.elasticsearch.xpack.security.authc.support;
 import com.unboundid.ldap.sdk.DN;
 import com.unboundid.ldap.sdk.LDAPException;
 import com.unboundid.util.LDAPSDKUsageException;
+import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.apache.lucene.util.automaton.CharacterRunAutomaton;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.common.Nullable;
-import org.elasticsearch.common.logging.Loggers;
 import org.elasticsearch.xpack.core.security.authc.RealmConfig;
 import org.elasticsearch.xpack.core.security.authc.support.mapper.expressiondsl.ExpressionModel;
 import org.elasticsearch.xpack.core.security.authc.support.mapper.expressiondsl.FieldExpression;
 import org.elasticsearch.xpack.core.security.authz.permission.Role;
 
 import java.util.Collection;
-import java.util.Collections;
-import java.util.HashSet;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -44,7 +42,7 @@ public interface UserRoleMapper {
      * the whole cluster depending on whether this role-mapper has node-local data or cluster-wide
      * data.
      */
-    void refreshRealmOnChange(CachingUsernamePasswordRealm realm);
+    void refreshRealmOnChange(CachingRealm realm);
 
     /**
      * A representation of a user for whom roles should be mapped.
@@ -62,10 +60,8 @@ public interface UserRoleMapper {
                         Map<String, Object> metadata, RealmConfig realm) {
             this.username = username;
             this.dn = dn;
-            this.groups = groups == null || groups.isEmpty()
-                    ? Collections.emptySet() : Collections.unmodifiableSet(new HashSet<>(groups));
-            this.metadata = metadata == null || metadata.isEmpty()
-                    ? Collections.emptyMap() : Collections.unmodifiableMap(metadata);
+            this.groups = Set.copyOf(groups);
+            this.metadata = Map.copyOf(metadata);
             this.realm = realm;
         }
 
@@ -79,7 +75,10 @@ public interface UserRoleMapper {
         public ExpressionModel asModel() {
             final ExpressionModel model = new ExpressionModel();
             model.defineField("username", username);
-            model.defineField("dn", dn, new DistinguishedNamePredicate(dn));
+            if (dn != null) {
+                // null dn fields get the default NULL_PREDICATE
+                model.defineField("dn", dn, new DistinguishedNamePredicate(dn));
+            }
             model.defineField("groups", groups, groups.stream()
                     .<Predicate<FieldExpression.FieldValue>>map(DistinguishedNamePredicate::new)
                     .reduce(Predicate::or)
@@ -151,7 +150,7 @@ public interface UserRoleMapper {
      * {@link ExpressionModel} class can take a custom {@code Predicate} that tests whether the data in the model
      * matches the {@link FieldExpression.FieldValue value} in the expression.
      *
-     * The string constructor parameter may or may not actaully parse as a DN - the "dn" field <em>should</em>
+     * The string constructor parameter may or may not actually parse as a DN - the "dn" field <em>should</em>
      * always be a DN, however groups will be a DN if they're from an LDAP/AD realm, but often won't be for a SAML realm.
      *
      * Because the {@link FieldExpression.FieldValue} might be a pattern ({@link CharacterRunAutomaton automaton}),
@@ -159,28 +158,25 @@ public interface UserRoleMapper {
      *
      */
     class DistinguishedNamePredicate implements Predicate<FieldExpression.FieldValue> {
-        private static final Logger LOGGER = Loggers.getLogger(DistinguishedNamePredicate.class);
+        private static final Logger LOGGER = LogManager.getLogger(DistinguishedNamePredicate.class);
 
         private final String string;
         private final DN dn;
 
         public DistinguishedNamePredicate(String string) {
+            assert string != null : "DN string should not be null. Use the dedicated NULL_PREDICATE for every user null field.";
             this.string = string;
             this.dn = parseDn(string);
         }
 
         private static DN parseDn(String string) {
-            if (string == null) {
-                return null;
-            } else {
-                try {
-                    return new DN(string);
-                } catch (LDAPException | LDAPSDKUsageException e) {
-                    if (LOGGER.isTraceEnabled()) {
-                        LOGGER.trace(new ParameterizedMessage("failed to parse [{}] as a DN", string), e);
-                    }
-                    return null;
+            try {
+                return new DN(string);
+            } catch (LDAPException | LDAPSDKUsageException e) {
+                if (LOGGER.isTraceEnabled()) {
+                    LOGGER.trace(new ParameterizedMessage("failed to parse [{}] as a DN", string), e);
                 }
+                return null;
             }
         }
 
@@ -240,7 +236,7 @@ public interface UserRoleMapper {
                 }
                 return testString.equalsIgnoreCase(dn.toNormalizedString());
             }
-            return string == null && fieldValue.getValue() == null;
+            return false;
         }
     }
 }

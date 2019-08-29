@@ -22,7 +22,9 @@ package org.elasticsearch.http.nio.cors;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelPromise;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
+import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpMethod;
@@ -30,14 +32,17 @@ import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import org.elasticsearch.common.Strings;
+import org.elasticsearch.http.CorsHandler;
+import org.elasticsearch.http.nio.NioHttpResponse;
 
+import java.util.Date;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
  * Handles <a href="http://www.w3.org/TR/cors/">Cross Origin Resource Sharing</a> (CORS) requests.
  * <p>
- * This handler can be configured using a {@link NioCorsConfig}, please
+ * This handler can be configured using a {@link CorsHandler.Config}, please
  * refer to this class for details about the configuration options available.
  *
  * This code was borrowed from Netty 4 and refactored to work for Elasticsearch's Netty 3 setup.
@@ -47,13 +52,13 @@ public class NioCorsHandler extends ChannelDuplexHandler {
     public static final String ANY_ORIGIN = "*";
     private static Pattern SCHEME_PATTERN = Pattern.compile("^https?://");
 
-    private final NioCorsConfig config;
-    private HttpRequest request;
+    private final CorsHandler.Config config;
+    private FullHttpRequest request;
 
     /**
-     * Creates a new instance with the specified {@link NioCorsConfig}.
+     * Creates a new instance with the specified {@link CorsHandler.Config}.
      */
-    public NioCorsHandler(final NioCorsConfig config) {
+    public NioCorsHandler(final CorsHandler.Config config) {
         if (config == null) {
             throw new NullPointerException();
         }
@@ -62,21 +67,38 @@ public class NioCorsHandler extends ChannelDuplexHandler {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        if (config.isCorsSupportEnabled() && msg instanceof HttpRequest) {
-            request = (HttpRequest) msg;
+        assert msg instanceof FullHttpRequest : "Invalid message type: " + msg.getClass();
+        if (config.isCorsSupportEnabled()) {
+            request = (FullHttpRequest) msg;
             if (isPreflightRequest(request)) {
-                handlePreflight(ctx, request);
-                return;
+                try {
+                    handlePreflight(ctx, request);
+                    return;
+                } finally {
+                    releaseRequest();
+                }
             }
-            if (config.isShortCircuit() && !validateOrigin()) {
-                forbidden(ctx, request);
-                return;
+            if (!validateOrigin()) {
+                try {
+                    forbidden(ctx, request);
+                    return;
+                } finally {
+                    releaseRequest();
+                }
             }
         }
         ctx.fireChannelRead(msg);
     }
 
-    public static void setCorsResponseHeaders(HttpRequest request, HttpResponse resp, NioCorsConfig config) {
+    @Override
+    public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
+        assert msg instanceof NioHttpResponse : "Invalid message type: " + msg.getClass();
+        NioHttpResponse response = (NioHttpResponse) msg;
+        setCorsResponseHeaders(response.getRequest().nettyRequest(), response, config);
+        ctx.write(response, promise);
+    }
+
+    public static void setCorsResponseHeaders(HttpRequest request, HttpResponse resp, CorsHandler.Config config) {
         if (!config.isCorsSupportEnabled()) {
             return;
         }
@@ -97,6 +119,11 @@ public class NioCorsHandler extends ChannelDuplexHandler {
         if (config.isCredentialsAllowed()) {
             resp.headers().add(HttpHeaderNames.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true");
         }
+    }
+
+    private void releaseRequest() {
+        request.release();
+        request = null;
     }
 
     private void handlePreflight(final ChannelHandlerContext ctx, final HttpRequest request) {
@@ -136,17 +163,13 @@ public class NioCorsHandler extends ChannelDuplexHandler {
      * @param response the HttpResponse to which the preflight response headers should be added.
      */
     private void setPreflightHeaders(final HttpResponse response) {
-        response.headers().add(config.preflightResponseHeaders());
+        response.headers().add("date", new Date());
+        response.headers().add("content-length", "0");
     }
 
     private boolean setOrigin(final HttpResponse response) {
         final String origin = request.headers().get(HttpHeaderNames.ORIGIN);
         if (!Strings.isNullOrEmpty(origin)) {
-            if ("null".equals(origin) && config.isNullOriginAllowed()) {
-                setAnyOrigin(response);
-                return true;
-            }
-
             if (config.isAnyOriginSupported()) {
                 if (config.isCredentialsAllowed()) {
                     echoRequestOrigin(response);
@@ -173,10 +196,6 @@ public class NioCorsHandler extends ChannelDuplexHandler {
         final String origin = request.headers().get(HttpHeaderNames.ORIGIN);
         if (Strings.isNullOrEmpty(origin)) {
             // Not a CORS request so we cannot validate it. It may be a non CORS request.
-            return true;
-        }
-
-        if ("null".equals(origin) && config.isNullOriginAllowed()) {
             return true;
         }
 

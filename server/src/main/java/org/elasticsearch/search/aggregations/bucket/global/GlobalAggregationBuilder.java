@@ -25,7 +25,6 @@ import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.search.aggregations.AbstractAggregationBuilder;
 import org.elasticsearch.search.aggregations.AggregationBuilder;
-import org.elasticsearch.search.aggregations.AggregatorFactories;
 import org.elasticsearch.search.aggregations.AggregatorFactories.Builder;
 import org.elasticsearch.search.aggregations.AggregatorFactory;
 import org.elasticsearch.search.internal.SearchContext;
@@ -62,7 +61,7 @@ public class GlobalAggregationBuilder extends AbstractAggregationBuilder<GlobalA
     }
 
     @Override
-    protected AggregatorFactory<?> doBuild(SearchContext context, AggregatorFactory<?> parent, Builder subFactoriesBuilder)
+    protected AggregatorFactory doBuild(SearchContext context, AggregatorFactory parent, Builder subFactoriesBuilder)
             throws IOException {
         return new GlobalAggregatorFactory(name, context, parent, subFactoriesBuilder, metaData);
     }
@@ -77,16 +76,6 @@ public class GlobalAggregationBuilder extends AbstractAggregationBuilder<GlobalA
     public static GlobalAggregationBuilder parse(String aggregationName, XContentParser parser) throws IOException {
         parser.nextToken();
         return new GlobalAggregationBuilder(aggregationName);
-    }
-
-    @Override
-    protected boolean doEquals(Object obj) {
-        return true;
-    }
-
-    @Override
-    protected int doHashCode() {
-        return 0;
     }
 
     @Override

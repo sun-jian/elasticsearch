@@ -1,5 +1,5 @@
 [[indices-recovery]]
-== Indices Recovery
+=== Indices Recovery
 
 The indices recovery API provides insight into on-going index shard recoveries.
 Recovery status may be reported for specific indices, or cluster-wide.
@@ -90,7 +90,8 @@ Response:
         "repository" : "my_repository",
         "snapshot" : "my_snapshot",
         "index" : "index1",
-        "version" : "{version}"
+        "version" : "{version}",
+        "restoreUUID": "PDh1ZAOaRbiGIVtCvZOMww"
       },
       "target" : {
         "id" : "ryqJ5lO5S4-lSFbGntkEkg",
@@ -248,7 +249,7 @@ Response:
 }
 --------------------------------------------------
 // TESTRESPONSE[s/"source" : \{[^}]*\}/"source" : $body.$_path/]
-// TESTRESPONSE[s/"details" : \[[^\]]*\]//]
+// TESTRESPONSE[s/"details" : \[[^\]]*\]/"details" : $body.$_path/]
 // TESTRESPONSE[s/: (\-)?[0-9]+/: $body.$_path/]
 // TESTRESPONSE[s/: "[^"]*"/: $body.$_path/]
 ////

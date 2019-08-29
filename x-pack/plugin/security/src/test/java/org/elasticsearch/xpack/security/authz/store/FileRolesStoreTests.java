@@ -16,16 +16,17 @@ import org.elasticsearch.license.XPackLicenseState;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.threadpool.TestThreadPool;
 import org.elasticsearch.threadpool.ThreadPool;
+import org.elasticsearch.transport.TransportRequest;
 import org.elasticsearch.watcher.ResourceWatcherService;
-import org.elasticsearch.xpack.core.XPackField;
 import org.elasticsearch.xpack.core.XPackSettings;
 import org.elasticsearch.xpack.core.security.audit.logfile.CapturingLogger;
+import org.elasticsearch.xpack.core.security.authc.Authentication;
 import org.elasticsearch.xpack.core.security.authz.RoleDescriptor;
 import org.elasticsearch.xpack.core.security.authz.permission.ClusterPermission;
 import org.elasticsearch.xpack.core.security.authz.permission.IndicesPermission;
 import org.elasticsearch.xpack.core.security.authz.permission.Role;
 import org.elasticsearch.xpack.core.security.authz.permission.RunAsPermission;
-import org.elasticsearch.xpack.core.security.authz.privilege.ClusterPrivilege;
+import org.elasticsearch.xpack.core.security.authz.privilege.ClusterPrivilegeResolver;
 import org.elasticsearch.xpack.core.security.authz.privilege.IndexPrivilege;
 
 import java.io.BufferedWriter;
@@ -37,6 +38,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -73,7 +75,7 @@ public class FileRolesStoreTests extends ESTestCase {
         assertThat(role, notNullValue());
         assertThat(role.names(), equalTo(new String[] { "role1" }));
         assertThat(role.cluster(), notNullValue());
-        assertThat(role.cluster().privilege(), is(ClusterPrivilege.ALL));
+        assertTrue(role.cluster().implies(ClusterPrivilegeResolver.ALL.buildPermission(ClusterPermission.builder()).build()));
         assertThat(role.indices(), notNullValue());
         assertThat(role.indices().groups(), notNullValue());
         assertThat(role.indices().groups().length, is(2));
@@ -101,7 +103,7 @@ public class FileRolesStoreTests extends ESTestCase {
         assertThat(role, notNullValue());
         assertThat(role.names(), equalTo(new String[] { "role1.ab" }));
         assertThat(role.cluster(), notNullValue());
-        assertThat(role.cluster().privilege(), is(ClusterPrivilege.ALL));
+        assertTrue(role.cluster().implies(ClusterPrivilegeResolver.ALL.buildPermission(ClusterPermission.builder()).build()));
         assertThat(role.indices(), notNullValue());
         assertThat(role.indices().groups(), notNullValue());
         assertThat(role.indices().groups().length, is(0));
@@ -113,7 +115,7 @@ public class FileRolesStoreTests extends ESTestCase {
         assertThat(role, notNullValue());
         assertThat(role.names(), equalTo(new String[] { "role2" }));
         assertThat(role.cluster(), notNullValue());
-        assertTrue(Operations.sameLanguage(role.cluster().privilege().getAutomaton(), ClusterPrivilege.ALL.getAutomaton()));
+        assertTrue(role.cluster().implies(ClusterPrivilegeResolver.ALL.buildPermission(ClusterPermission.builder()).build()));
         assertThat(role.indices(), notNullValue());
         assertThat(role.indices(), is(IndicesPermission.NONE));
         assertThat(role.runAs(), is(RunAsPermission.NONE));
@@ -237,7 +239,9 @@ public class FileRolesStoreTests extends ESTestCase {
 
     public void testParseFileWithFLSAndDLSDisabled() throws Exception {
         Path path = getDataPath("roles.yml");
-        Logger logger = CapturingLogger.newCapturingLogger(Level.ERROR);
+        Logger logger = CapturingLogger.newCapturingLogger(Level.ERROR, null);
+        List<String> events = CapturingLogger.output(logger.getName(), Level.ERROR);
+        events.clear();
         Map<String, RoleDescriptor> roles = FileRolesStore.parseFile(path, logger, Settings.builder()
                 .put(XPackSettings.DLS_FLS_ENABLED.getKey(), false)
                 .build(), new XPackLicenseState(Settings.EMPTY));
@@ -247,7 +251,6 @@ public class FileRolesStoreTests extends ESTestCase {
         assertThat(roles.get("role_query"), nullValue());
         assertThat(roles.get("role_query_fields"), nullValue());
 
-        List<String> events = CapturingLogger.output(logger.getName(), Level.ERROR);
         assertThat(events, hasSize(3));
         assertThat(
                 events.get(0),
@@ -263,7 +266,9 @@ public class FileRolesStoreTests extends ESTestCase {
 
     public void testParseFileWithFLSAndDLSUnlicensed() throws Exception {
         Path path = getDataPath("roles.yml");
-        Logger logger = CapturingLogger.newCapturingLogger(Level.WARN);
+        Logger logger = CapturingLogger.newCapturingLogger(Level.WARN, null);
+        List<String> events = CapturingLogger.output(logger.getName(), Level.WARN);
+        events.clear();
         XPackLicenseState licenseState = mock(XPackLicenseState.class);
         when(licenseState.isDocumentAndFieldLevelSecurityAllowed()).thenReturn(false);
         Map<String, RoleDescriptor> roles = FileRolesStore.parseFile(path, logger, Settings.EMPTY, licenseState);
@@ -273,7 +278,6 @@ public class FileRolesStoreTests extends ESTestCase {
         assertNotNull(roles.get("role_query"));
         assertNotNull(roles.get("role_query_fields"));
 
-        List<String> events = CapturingLogger.output(logger.getName(), Level.WARN);
         assertThat(events, hasSize(3));
         assertThat(
                 events.get(0),
@@ -317,8 +321,11 @@ public class FileRolesStoreTests extends ESTestCase {
             threadPool = new TestThreadPool("test");
             watcherService = new ResourceWatcherService(settings, threadPool);
             final CountDownLatch latch = new CountDownLatch(1);
-            FileRolesStore store = new FileRolesStore(settings, env, watcherService, latch::countDown,
-                    new XPackLicenseState(Settings.EMPTY));
+            final Set<String> modifiedRoles = new HashSet<>();
+            FileRolesStore store = new FileRolesStore(settings, env, watcherService, roleSet -> {
+                    modifiedRoles.addAll(roleSet);
+                    latch.countDown();
+                }, new XPackLicenseState(Settings.EMPTY));
 
             Set<RoleDescriptor> descriptors = store.roleDescriptors(Collections.singleton("role1"));
             assertThat(descriptors, notNullValue());
@@ -342,15 +349,62 @@ public class FileRolesStoreTests extends ESTestCase {
                 fail("Waited too long for the updated file to be picked up");
             }
 
+            assertEquals(1, modifiedRoles.size());
+            assertTrue(modifiedRoles.contains("role5"));
+            final TransportRequest request = mock(TransportRequest.class);
+            final Authentication authentication = mock(Authentication.class);
             descriptors = store.roleDescriptors(Collections.singleton("role5"));
             assertThat(descriptors, notNullValue());
             assertEquals(1, descriptors.size());
             Role role = Role.builder(descriptors.iterator().next(), null).build();
             assertThat(role, notNullValue());
             assertThat(role.names(), equalTo(new String[] { "role5" }));
-            assertThat(role.cluster().check("cluster:monitor/foo/bar"), is(true));
-            assertThat(role.cluster().check("cluster:admin/foo/bar"), is(false));
+            assertThat(role.cluster().check("cluster:monitor/foo/bar", request, authentication), is(true));
+            assertThat(role.cluster().check("cluster:admin/foo/bar", request, authentication), is(false));
 
+            // truncate to remove some
+            final Set<String> truncatedFileRolesModified = new HashSet<>();
+            final CountDownLatch truncateLatch = new CountDownLatch(1);
+            store = new FileRolesStore(settings, env, watcherService, roleSet -> {
+                truncatedFileRolesModified.addAll(roleSet);
+                truncateLatch.countDown();
+            }, new XPackLicenseState(Settings.EMPTY));
+
+            final Set<String> allRolesPreTruncate = store.getAllRoleNames();
+            try (BufferedWriter writer = Files.newBufferedWriter(tmp, StandardCharsets.UTF_8, StandardOpenOption.TRUNCATE_EXISTING)) {
+                writer.append("role5:").append(System.lineSeparator());
+                writer.append("  cluster:").append(System.lineSeparator());
+                writer.append("    - 'MONITOR'");
+            }
+
+            truncateLatch.await();
+            assertEquals(allRolesPreTruncate.size() - 1, truncatedFileRolesModified.size());
+            assertTrue(allRolesPreTruncate.contains("role5"));
+            assertFalse(truncatedFileRolesModified.contains("role5"));
+            descriptors = store.roleDescriptors(Collections.singleton("role5"));
+            assertThat(descriptors, notNullValue());
+            assertEquals(1, descriptors.size());
+
+            // modify
+            final Set<String> modifiedFileRolesModified = new HashSet<>();
+            final CountDownLatch modifyLatch = new CountDownLatch(1);
+            store = new FileRolesStore(settings, env, watcherService, roleSet -> {
+                modifiedFileRolesModified.addAll(roleSet);
+                modifyLatch.countDown();
+            }, new XPackLicenseState(Settings.EMPTY));
+
+            try (BufferedWriter writer = Files.newBufferedWriter(tmp, StandardCharsets.UTF_8, StandardOpenOption.TRUNCATE_EXISTING)) {
+                writer.append("role5:").append(System.lineSeparator());
+                writer.append("  cluster:").append(System.lineSeparator());
+                writer.append("    - 'ALL'");
+            }
+
+            modifyLatch.await();
+            assertEquals(1, modifiedFileRolesModified.size());
+            assertTrue(modifiedFileRolesModified.contains("role5"));
+            descriptors = store.roleDescriptors(Collections.singleton("role5"));
+            assertThat(descriptors, notNullValue());
+            assertEquals(1, descriptors.size());
         } finally {
             if (watcherService != null) {
                 watcherService.stop();
@@ -368,7 +422,9 @@ public class FileRolesStoreTests extends ESTestCase {
 
     public void testThatInvalidRoleDefinitions() throws Exception {
         Path path = getDataPath("invalid_roles.yml");
-        Logger logger = CapturingLogger.newCapturingLogger(Level.ERROR);
+        Logger logger = CapturingLogger.newCapturingLogger(Level.ERROR, null);
+        List<String> entries = CapturingLogger.output(logger.getName(), Level.ERROR);
+        entries.clear();
         Map<String, RoleDescriptor> roles = FileRolesStore.parseFile(path, logger, Settings.EMPTY, new XPackLicenseState(Settings.EMPTY));
         assertThat(roles.size(), is(1));
         assertThat(roles, hasKey("valid_role"));
@@ -378,7 +434,6 @@ public class FileRolesStoreTests extends ESTestCase {
         assertThat(role, notNullValue());
         assertThat(role.names(), equalTo(new String[] { "valid_role" }));
 
-        List<String> entries = CapturingLogger.output(logger.getName(), Level.ERROR);
         assertThat(entries, hasSize(6));
         assertThat(
                 entries.get(0),
@@ -394,12 +449,13 @@ public class FileRolesStoreTests extends ESTestCase {
 
     public void testThatRoleNamesDoesNotResolvePermissions() throws Exception {
         Path path = getDataPath("invalid_roles.yml");
-        Logger logger = CapturingLogger.newCapturingLogger(Level.ERROR);
+        Logger logger = CapturingLogger.newCapturingLogger(Level.ERROR, null);
+        List<String> events = CapturingLogger.output(logger.getName(), Level.ERROR);
+        events.clear();
         Set<String> roleNames = FileRolesStore.parseFileForRoleNames(path, logger);
         assertThat(roleNames.size(), is(6));
         assertThat(roleNames, containsInAnyOrder("valid_role", "role1", "role2", "role3", "role4", "role5"));
 
-        List<String> events = CapturingLogger.output(logger.getName(), Level.ERROR);
         assertThat(events, hasSize(1));
         assertThat(
                 events.get(0),
@@ -407,9 +463,9 @@ public class FileRolesStoreTests extends ESTestCase {
     }
 
     public void testReservedRoles() throws Exception {
-
-        Logger logger = CapturingLogger.newCapturingLogger(Level.INFO);
-
+        Logger logger = CapturingLogger.newCapturingLogger(Level.INFO, null);
+        List<String> events = CapturingLogger.output(logger.getName(), Level.ERROR);
+        events.clear();
         Path path = getDataPath("reserved_roles.yml");
         Map<String, RoleDescriptor> roles = FileRolesStore.parseFile(path, logger, Settings.EMPTY, new XPackLicenseState(Settings.EMPTY));
         assertThat(roles, notNullValue());
@@ -417,7 +473,6 @@ public class FileRolesStoreTests extends ESTestCase {
 
         assertThat(roles, hasKey("admin"));
 
-        List<String> events = CapturingLogger.output(logger.getName(), Level.ERROR);
         assertThat(events, notNullValue());
         assertThat(events, hasSize(4));
         // the system role will always be checked first

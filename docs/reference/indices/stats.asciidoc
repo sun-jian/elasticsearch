@@ -1,5 +1,5 @@
 [[indices-stats]]
-== Indices Stats
+=== Indices Stats
 
 Indices level stats provide statistics on different operations happening
 on an index. The API provides statistics on the index level scope
@@ -88,7 +88,7 @@ GET /_stats/search?groups=group1,group2
 
 The stats returned are aggregated on the index level, with
 `primaries` and `total` aggregations, where `primaries` are the values for only the
-primary shards, and `total` are the cumulated values for both primary and replica shards.
+primary shards, and `total` are the accumulated values for both primary and replica shards.
 
 In order to get back shard level stats, set the `level` parameter to `shards`.
 

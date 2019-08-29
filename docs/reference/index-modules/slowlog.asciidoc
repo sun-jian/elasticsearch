@@ -26,7 +26,26 @@ index.search.slowlog.threshold.fetch.trace: 200ms
 index.search.slowlog.level: info
 --------------------------------------------------
 
-All of the above settings are _dynamic_ and are set per-index.
+All of the above settings are _dynamic_ and can be set for each index using the
+<<indices-update-settings, update indices settings>> API. For example: 
+
+[source,js]
+--------------------------------------------------
+PUT /twitter/_settings
+{
+    "index.search.slowlog.threshold.query.warn": "10s",
+    "index.search.slowlog.threshold.query.info": "5s",
+    "index.search.slowlog.threshold.query.debug": "2s",
+    "index.search.slowlog.threshold.query.trace": "500ms",
+    "index.search.slowlog.threshold.fetch.warn": "1s",
+    "index.search.slowlog.threshold.fetch.info": "800ms",
+    "index.search.slowlog.threshold.fetch.debug": "500ms",
+    "index.search.slowlog.threshold.fetch.trace": "200ms",
+    "index.search.slowlog.level": "info"
+}
+--------------------------------------------------
+// CONSOLE
+// TEST[setup:twitter]
 
 By default, none are enabled (set to `-1`). Levels (`warn`, `info`,
 `debug`, `trace`) allow to control under which logging level the log
@@ -50,7 +69,7 @@ appender.index_search_slowlog_rolling.type = RollingFile
 appender.index_search_slowlog_rolling.name = index_search_slowlog_rolling
 appender.index_search_slowlog_rolling.fileName = ${sys:es.logs.base_path}${sys:file.separator}${sys:es.logs.cluster_name}_index_search_slowlog.log
 appender.index_search_slowlog_rolling.layout.type = PatternLayout
-appender.index_search_slowlog_rolling.layout.pattern = [%d{ISO8601}][%-5p][%-25c] %marker%.-10000m%n
+appender.index_search_slowlog_rolling.layout.pattern = [%d{ISO8601}][%-5p][%-25c] [%node_name]%marker %.-10000m%n
 appender.index_search_slowlog_rolling.filePattern = ${sys:es.logs.base_path}${sys:file.separator}${sys:es.logs.cluster_name}_index_search_slowlog-%i.log.gz
 appender.index_search_slowlog_rolling.policies.type = Policies
 appender.index_search_slowlog_rolling.policies.size.type = SizeBasedTriggeringPolicy
@@ -83,7 +102,23 @@ index.indexing.slowlog.level: info
 index.indexing.slowlog.source: 1000
 --------------------------------------------------
 
-All of the above settings are _dynamic_ and are set per-index.
+All of the above settings are _dynamic_ and can be set for each index using the
+<<indices-update-settings, update indices settings>> API. For example: 
+
+[source,js]
+--------------------------------------------------
+PUT /twitter/_settings
+{
+    "index.indexing.slowlog.threshold.index.warn": "10s",
+    "index.indexing.slowlog.threshold.index.info": "5s",
+    "index.indexing.slowlog.threshold.index.debug": "2s",
+    "index.indexing.slowlog.threshold.index.trace": "500ms",
+    "index.indexing.slowlog.level": "info",
+    "index.indexing.slowlog.source": "1000"
+}
+--------------------------------------------------
+// CONSOLE
+// TEST[setup:twitter]
 
 By default Elasticsearch will log the first 1000 characters of the _source in
 the slowlog. You can change that with `index.indexing.slowlog.source`. Setting
@@ -103,7 +138,7 @@ appender.index_indexing_slowlog_rolling.type = RollingFile
 appender.index_indexing_slowlog_rolling.name = index_indexing_slowlog_rolling
 appender.index_indexing_slowlog_rolling.fileName = ${sys:es.logs.base_path}${sys:file.separator}${sys:es.logs.cluster_name}_index_indexing_slowlog.log
 appender.index_indexing_slowlog_rolling.layout.type = PatternLayout
-appender.index_indexing_slowlog_rolling.layout.pattern = [%d{ISO8601}][%-5p][%-25c] %marker%.-10000m%n
+appender.index_indexing_slowlog_rolling.layout.pattern = [%d{ISO8601}][%-5p][%-25c] [%node_name]%marker %.-10000m%n
 appender.index_indexing_slowlog_rolling.filePattern = ${sys:es.logs.base_path}${sys:file.separator}${sys:es.logs.cluster_name}_index_indexing_slowlog-%i.log.gz
 appender.index_indexing_slowlog_rolling.policies.type = Policies
 appender.index_indexing_slowlog_rolling.policies.size.type = SizeBasedTriggeringPolicy

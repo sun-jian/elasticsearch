@@ -3,42 +3,48 @@
  * or more contributor license agreements. Licensed under the Elastic License;
  * you may not use this file except in compliance with the Elastic License.
  */
+
 package org.elasticsearch.xpack.watcher.rest.action;
 
-import org.elasticsearch.common.settings.Settings;
+import org.apache.logging.log4j.LogManager;
+import org.elasticsearch.client.node.NodeClient;
+import org.elasticsearch.common.logging.DeprecationLogger;
 import org.elasticsearch.common.xcontent.XContentBuilder;
+import org.elasticsearch.protocol.xpack.watcher.DeleteWatchRequest;
+import org.elasticsearch.protocol.xpack.watcher.DeleteWatchResponse;
+import org.elasticsearch.rest.BaseRestHandler;
 import org.elasticsearch.rest.BytesRestResponse;
 import org.elasticsearch.rest.RestController;
 import org.elasticsearch.rest.RestRequest;
 import org.elasticsearch.rest.RestResponse;
 import org.elasticsearch.rest.RestStatus;
 import org.elasticsearch.rest.action.RestBuilderListener;
-import org.elasticsearch.xpack.core.watcher.client.WatcherClient;
-import org.elasticsearch.xpack.core.watcher.transport.actions.delete.DeleteWatchRequest;
-import org.elasticsearch.xpack.core.watcher.transport.actions.delete.DeleteWatchResponse;
-import org.elasticsearch.xpack.watcher.rest.WatcherRestHandler;
-
-import java.io.IOException;
+import org.elasticsearch.xpack.core.watcher.transport.actions.delete.DeleteWatchAction;
 
 import static org.elasticsearch.rest.RestRequest.Method.DELETE;
 import static org.elasticsearch.rest.RestStatus.NOT_FOUND;
 import static org.elasticsearch.rest.RestStatus.OK;
 
-public class RestDeleteWatchAction extends WatcherRestHandler {
-    public RestDeleteWatchAction(Settings settings, RestController controller) {
-        super(settings);
-        controller.registerHandler(DELETE, URI_BASE + "/watch/{id}", this);
+public class RestDeleteWatchAction extends BaseRestHandler {
+
+    private static final DeprecationLogger deprecationLogger = new DeprecationLogger(LogManager.getLogger(RestDeleteWatchAction.class));
+
+    public RestDeleteWatchAction(RestController controller) {
+        // TODO: remove deprecated endpoint in 8.0.0
+        controller.registerWithDeprecatedHandler(
+            DELETE, "/_watcher/watch/{id}", this,
+            DELETE, "/_xpack/watcher/watch/{id}", deprecationLogger);
     }
 
     @Override
     public String getName() {
-        return "xpack_watcher_delete_watch_action";
+        return "watcher_delete_watch";
     }
 
     @Override
-    protected RestChannelConsumer doPrepareRequest(final RestRequest request, WatcherClient client) throws IOException {
+    protected RestChannelConsumer prepareRequest(final RestRequest request, NodeClient client) {
         DeleteWatchRequest deleteWatchRequest = new DeleteWatchRequest(request.param("id"));
-        return channel -> client.deleteWatch(deleteWatchRequest, new RestBuilderListener<DeleteWatchResponse>(channel) {
+        return channel -> client.execute(DeleteWatchAction.INSTANCE, deleteWatchRequest, new RestBuilderListener<>(channel) {
             @Override
             public RestResponse buildResponse(DeleteWatchResponse response, XContentBuilder builder) throws Exception {
                 builder.startObject()

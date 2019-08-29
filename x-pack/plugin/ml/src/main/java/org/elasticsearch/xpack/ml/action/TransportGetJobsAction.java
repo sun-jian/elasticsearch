@@ -14,24 +14,25 @@ import org.elasticsearch.cluster.block.ClusterBlockLevel;
 import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.inject.Inject;
-import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.io.stream.StreamInput;
+import org.elasticsearch.tasks.Task;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
 import org.elasticsearch.xpack.core.ml.action.GetJobsAction;
-import org.elasticsearch.xpack.core.ml.action.util.QueryPage;
 import org.elasticsearch.xpack.ml.job.JobManager;
-import org.elasticsearch.xpack.core.ml.job.config.Job;
+
+import java.io.IOException;
 
 public class TransportGetJobsAction extends TransportMasterNodeReadAction<GetJobsAction.Request, GetJobsAction.Response> {
 
     private final JobManager jobManager;
 
     @Inject
-    public TransportGetJobsAction(Settings settings, TransportService transportService, ClusterService clusterService,
+    public TransportGetJobsAction(TransportService transportService, ClusterService clusterService,
                                   ThreadPool threadPool, ActionFilters actionFilters,
                                   IndexNameExpressionResolver indexNameExpressionResolver,
                                   JobManager jobManager) {
-        super(settings, GetJobsAction.NAME, transportService, clusterService, threadPool, actionFilters,
+        super(GetJobsAction.NAME, transportService, clusterService, threadPool, actionFilters,
             GetJobsAction.Request::new, indexNameExpressionResolver);
         this.jobManager = jobManager;
     }
@@ -42,16 +43,20 @@ public class TransportGetJobsAction extends TransportMasterNodeReadAction<GetJob
     }
 
     @Override
-    protected GetJobsAction.Response newResponse() {
-        return new GetJobsAction.Response();
+    protected GetJobsAction.Response read(StreamInput in) throws IOException {
+        return new GetJobsAction.Response(in);
     }
 
     @Override
-    protected void masterOperation(GetJobsAction.Request request, ClusterState state, ActionListener<GetJobsAction.Response> listener)
-            throws Exception {
+    protected void masterOperation(Task task, GetJobsAction.Request request, ClusterState state,
+                                   ActionListener<GetJobsAction.Response> listener) {
         logger.debug("Get job '{}'", request.getJobId());
-        QueryPage<Job> jobs = jobManager.expandJobs(request.getJobId(), request.allowNoJobs(), state);
-        listener.onResponse(new GetJobsAction.Response(jobs));
+        jobManager.expandJobs(request.getJobId(), request.allowNoJobs(), ActionListener.wrap(
+                jobs -> {
+                    listener.onResponse(new GetJobsAction.Response(jobs));
+                },
+                listener::onFailure
+        ));
     }
 
     @Override

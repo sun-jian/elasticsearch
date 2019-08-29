@@ -11,14 +11,12 @@ search, and as a `keyword` field for sorting or aggregations:
 PUT my_index
 {
   "mappings": {
-    "_doc": {
-      "properties": {
-        "city": {
-          "type": "text",
-          "fields": {
-            "raw": { <1>
-              "type":  "keyword"
-            }
+    "properties": {
+      "city": {
+        "type": "text",
+        "fields": {
+          "raw": { <1>
+            "type":  "keyword"
           }
         }
       }
@@ -62,8 +60,7 @@ GET my_index/_search
 
 NOTE: Multi-fields do not change the original `_source` field.
 
-TIP: The `fields` setting is allowed to have different settings for fields of
-the same name in the same index.  New multi-fields can be added to existing
+TIP: New multi-fields can be added to existing
 fields using the <<indices-put-mapping,PUT mapping API>>.
 
 ==== Multi-fields with multiple analyzers
@@ -79,15 +76,13 @@ which stems words into their root form:
 PUT my_index
 {
   "mappings": {
-    "_doc": {
-      "properties": {
-        "text": { <1>
-          "type": "text",
-          "fields": {
-            "english": { <2>
-              "type":     "text",
-              "analyzer": "english"
-            }
+    "properties": {
+      "text": { <1>
+        "type": "text",
+        "fields": {
+          "english": { <2>
+            "type":     "text",
+            "analyzer": "english"
           }
         }
       }
@@ -127,7 +122,7 @@ the second document.  The `text.english` field contains `fox` for both
 documents, because `foxes` is stemmed to `fox`.
 
 The query string is also analyzed by the `standard` analyzer for the `text`
-field, and by the `english` analyzer` for the `text.english` field.  The
+field, and by the `english` analyzer for the `text.english` field.  The
 stemmed field allows a query for `foxes` to also match the document containing
 just `fox`.  This allows us to match as many documents as possible.  By also
 querying the unstemmed `text` field, we improve the relevance score of the

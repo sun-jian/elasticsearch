@@ -21,15 +21,15 @@ package org.elasticsearch.action.ingest;
 
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.ActionRunnable;
+import org.elasticsearch.ingest.CompoundProcessor;
 import org.elasticsearch.ingest.IngestDocument;
 import org.elasticsearch.ingest.Pipeline;
-import org.elasticsearch.ingest.CompoundProcessor;
 import org.elasticsearch.threadpool.ThreadPool;
 
 import java.util.ArrayList;
 import java.util.List;
 
-import static org.elasticsearch.action.ingest.TrackingResultProcessor.decorate;
+import static org.elasticsearch.ingest.TrackingResultProcessor.decorate;
 
 class SimulateExecutionService {
 
@@ -46,15 +46,17 @@ class SimulateExecutionService {
             List<SimulateProcessorResult> processorResultList = new ArrayList<>();
             CompoundProcessor verbosePipelineProcessor = decorate(pipeline.getCompoundProcessor(), processorResultList);
             try {
-                verbosePipelineProcessor.execute(ingestDocument);
+                Pipeline verbosePipeline = new Pipeline(pipeline.getId(), pipeline.getDescription(), pipeline.getVersion(),
+                    verbosePipelineProcessor);
+                ingestDocument.executePipeline(verbosePipeline);
                 return new SimulateDocumentVerboseResult(processorResultList);
             } catch (Exception e) {
                 return new SimulateDocumentVerboseResult(processorResultList);
             }
         } else {
             try {
-                pipeline.execute(ingestDocument);
-                return new SimulateDocumentBaseResult(ingestDocument);
+                IngestDocument result = pipeline.execute(ingestDocument);
+                return new SimulateDocumentBaseResult(result);
             } catch (Exception e) {
                 return new SimulateDocumentBaseResult(e);
             }
@@ -62,15 +64,15 @@ class SimulateExecutionService {
     }
 
     public void execute(SimulatePipelineRequest.Parsed request, ActionListener<SimulatePipelineResponse> listener) {
-        threadPool.executor(THREAD_POOL_NAME).execute(new ActionRunnable<SimulatePipelineResponse>(listener) {
-            @Override
-            protected void doRun() throws Exception {
+        threadPool.executor(THREAD_POOL_NAME).execute(ActionRunnable.wrap(listener, l -> {
                 List<SimulateDocumentResult> responses = new ArrayList<>();
                 for (IngestDocument ingestDocument : request.getDocuments()) {
-                    responses.add(executeDocument(request.getPipeline(), ingestDocument, request.isVerbose()));
+                    SimulateDocumentResult response = executeDocument(request.getPipeline(), ingestDocument, request.isVerbose());
+                    if (response != null) {
+                        responses.add(response);
+                    }
                 }
-                listener.onResponse(new SimulatePipelineResponse(request.getPipeline().getId(), request.isVerbose(), responses));
-            }
-        });
+                l.onResponse(new SimulatePipelineResponse(request.getPipeline().getId(), request.isVerbose(), responses));
+        }));
     }
 }

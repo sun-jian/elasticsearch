@@ -43,12 +43,14 @@ search result>> is greater than or equal to 5:
 {
   "condition" : {
     "compare" : {
-      "ctx.payload.hits.total" : { <1>
+      "ctx.payload.hits.total.value" : { <1>
         "gte" : 5 <2>
       }
+    }
   }
 }
 --------------------------------------------------
+// NOTCONSOLE
 <1> Use dot notation to reference a value in the execution context.
 <2> Specify a comparison operator and the value you want to compare against.
     
@@ -65,9 +67,11 @@ of the form `<{expression}>`. For example, the following expression returns
       "ctx.execution_time" : {
         "gte" : "<{now-5m}>"
       }
+    }
   }
 }
 --------------------------------------------------
+// NOTCONSOLE
 
 You can also compare two values in the execution context by specifying the 
 compared value as a path of the form of `{{path}}`. For example, the following 
@@ -82,9 +86,11 @@ to the `ctx.payload.aggregations.handled.buckets.true.doc_count`:
       "ctx.payload.aggregations.status.buckets.error.doc_count" : {
         "not_eq" : "{{ctx.payload.aggregations.handled.buckets.true.doc_count}}"
       }
+    }
   }
 }
 --------------------------------------------------
+// NOTCONSOLE
 
 ==== Accessing Values in the Execution Context
 
